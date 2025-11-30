@@ -13,6 +13,7 @@ class DC_Servers_Manager {
 
     private static $instance = null;
     private $table_name;
+    private $inventory_table;
 
     public static function instance() {
         if ( self::$instance === null ) {
@@ -23,7 +24,8 @@ class DC_Servers_Manager {
 
     private function __construct() {
         global $wpdb;
-        $this->table_name = $wpdb->prefix . 'dc_servers';
+        $this->table_name      = $wpdb->prefix . 'dc_servers';
+        $this->inventory_table = $wpdb->prefix . 'dc_server_inventory';
 
         register_activation_hook( __FILE__, array( $this, 'activate' ) );
         add_shortcode( 'dc_servers_manager', array( $this, 'render_shortcode' ) );
@@ -33,10 +35,13 @@ class DC_Servers_Manager {
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'init', array( $this, 'handle_post_requests' ) );
         add_action( 'init', array( $this, 'handle_download_requests' ) );
+        add_action( 'init', array( $this, 'maybe_schedule_inventory_import' ) );
         add_action( 'plugins_loaded', array( $this, 'maybe_create_lookup_tables' ) );
         add_action( 'admin_menu', array( $this, 'register_admin_menu' ) );
         add_action( 'admin_post_dc_save_lookup', array( $this, 'handle_save_lookup' ) );
         add_action( 'admin_post_dc_delete_lookup', array( $this, 'handle_delete_lookup' ) );
+        add_action( 'admin_post_dc_import_inventory', array( $this, 'handle_manual_inventory_import' ) );
+        add_action( 'dc_servers_import_inventory', array( $this, 'run_scheduled_inventory_import' ) );
     }
 
     public function activate() {
@@ -98,10 +103,43 @@ class DC_Servers_Manager {
             UNIQUE KEY unique_wan_ip_address (address)
         ) $charset_collate;";
 
+        $inventory_sql = "CREATE TABLE {$this->inventory_table} (
+            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            object_type VARCHAR(100) NOT NULL DEFAULT '',
+            host_name VARCHAR(255) NOT NULL,
+            vm_name VARCHAR(255) NOT NULL,
+            memory_mb BIGINT(20) NOT NULL DEFAULT 0,
+            nic1_name VARCHAR(255) DEFAULT '',
+            nic1_ip VARCHAR(45) DEFAULT '',
+            nic2_name VARCHAR(255) DEFAULT '',
+            nic2_ip VARCHAR(45) DEFAULT '',
+            nic3_name VARCHAR(255) DEFAULT '',
+            nic3_ip VARCHAR(45) DEFAULT '',
+            physicaldisk1_number VARCHAR(50) DEFAULT '',
+            physicaldisk1_model VARCHAR(255) DEFAULT '',
+            physicaldisk1_sizegb VARCHAR(50) DEFAULT '',
+            physicaldisk2_number VARCHAR(50) DEFAULT '',
+            physicaldisk2_model VARCHAR(255) DEFAULT '',
+            physicaldisk2_sizegb VARCHAR(50) DEFAULT '',
+            physicaldisk3_number VARCHAR(50) DEFAULT '',
+            physicaldisk3_model VARCHAR(255) DEFAULT '',
+            physicaldisk3_sizegb VARCHAR(50) DEFAULT '',
+            physicaldisk4_number VARCHAR(50) DEFAULT '',
+            physicaldisk4_model VARCHAR(255) DEFAULT '',
+            physicaldisk4_sizegb VARCHAR(50) DEFAULT '',
+            physicaldisk5_number VARCHAR(50) DEFAULT '',
+            physicaldisk5_model VARCHAR(255) DEFAULT '',
+            physicaldisk5_sizegb VARCHAR(50) DEFAULT '',
+            imported_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY host_vm_unique (host_name, vm_name)
+        ) $charset_collate;";
+
         dbDelta( $lookup_sql );
         dbDelta( $farm_sql );
         dbDelta( $internal_sql );
         dbDelta( $wan_sql );
+        dbDelta( $inventory_sql );
     }
 
     public function maybe_create_lookup_tables() {
@@ -110,6 +148,7 @@ class DC_Servers_Manager {
         $farm_table     = $wpdb->prefix . 'dc_server_farms';
         $internal_table = $wpdb->prefix . 'dc_server_internal_ips';
         $wan_table      = $wpdb->prefix . 'dc_server_wan_addresses';
+        $inventory_table = $this->inventory_table;
         $charset_collate = $wpdb->get_charset_collate();
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -162,6 +201,41 @@ class DC_Servers_Manager {
                 updated_at DATETIME NOT NULL,
                 PRIMARY KEY (id),
                 UNIQUE KEY unique_wan_ip_address (address)
+            ) {$charset_collate};";
+            dbDelta( $sql );
+        }
+
+        if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $inventory_table ) ) !== $inventory_table ) {
+            $sql = "CREATE TABLE {$inventory_table} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                object_type VARCHAR(100) NOT NULL DEFAULT '',
+                host_name VARCHAR(255) NOT NULL,
+                vm_name VARCHAR(255) NOT NULL,
+                memory_mb BIGINT(20) NOT NULL DEFAULT 0,
+                nic1_name VARCHAR(255) DEFAULT '',
+                nic1_ip VARCHAR(45) DEFAULT '',
+                nic2_name VARCHAR(255) DEFAULT '',
+                nic2_ip VARCHAR(45) DEFAULT '',
+                nic3_name VARCHAR(255) DEFAULT '',
+                nic3_ip VARCHAR(45) DEFAULT '',
+                physicaldisk1_number VARCHAR(50) DEFAULT '',
+                physicaldisk1_model VARCHAR(255) DEFAULT '',
+                physicaldisk1_sizegb VARCHAR(50) DEFAULT '',
+                physicaldisk2_number VARCHAR(50) DEFAULT '',
+                physicaldisk2_model VARCHAR(255) DEFAULT '',
+                physicaldisk2_sizegb VARCHAR(50) DEFAULT '',
+                physicaldisk3_number VARCHAR(50) DEFAULT '',
+                physicaldisk3_model VARCHAR(255) DEFAULT '',
+                physicaldisk3_sizegb VARCHAR(50) DEFAULT '',
+                physicaldisk4_number VARCHAR(50) DEFAULT '',
+                physicaldisk4_model VARCHAR(255) DEFAULT '',
+                physicaldisk4_sizegb VARCHAR(50) DEFAULT '',
+                physicaldisk5_number VARCHAR(50) DEFAULT '',
+                physicaldisk5_model VARCHAR(255) DEFAULT '',
+                physicaldisk5_sizegb VARCHAR(50) DEFAULT '',
+                imported_at DATETIME NOT NULL,
+                PRIMARY KEY (id),
+                UNIQUE KEY host_vm_unique (host_name, vm_name)
             ) {$charset_collate};";
             dbDelta( $sql );
         }
@@ -664,6 +738,238 @@ class DC_Servers_Manager {
         return 0;
     }
 
+    public function maybe_schedule_inventory_import() {
+        if ( ! wp_next_scheduled( 'dc_servers_import_inventory' ) ) {
+            wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', 'dc_servers_import_inventory' );
+        }
+    }
+
+    public function run_scheduled_inventory_import() {
+        $this->import_inventory_from_sources();
+    }
+
+    public function handle_manual_inventory_import() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        if ( empty( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'dc_inventory_import' ) ) {
+            wp_die( 'Nonce error' );
+        }
+
+        $summary = $this->import_inventory_from_sources( true );
+        set_transient( 'dc_inventory_notice', $summary, 60 );
+
+        $redirect = wp_get_referer() ? wp_get_referer() : admin_url( 'admin.php?page=dc-servers-settings' );
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    private function import_inventory_from_sources( $collect_messages = false ) {
+        $locations = $this->get_locations();
+        $messages  = array();
+        $imported  = 0;
+        $processed = 0;
+
+        if ( empty( $locations ) ) {
+            if ( $collect_messages ) {
+                $messages[] = 'לא נמצאו Hyper-v Hosts לטעינה.';
+            }
+            return array( 'messages' => $messages, 'imported' => 0, 'processed' => 0 );
+        }
+
+        foreach ( $locations as $loc ) {
+            $result = $this->import_inventory_for_host( $loc->name );
+            $imported += $result['imported'];
+            $processed += $result['processed'];
+
+            if ( $collect_messages && ! empty( $result['message'] ) ) {
+                $messages[] = $result['message'];
+            }
+        }
+
+        update_option( 'dc_inventory_last_run', current_time( 'mysql' ) );
+
+        return array(
+            'messages'  => $messages,
+            'imported'  => $imported,
+            'processed' => $processed,
+        );
+    }
+
+    private function import_inventory_for_host( $host_name ) {
+        $content = $this->resolve_inventory_content( $host_name );
+        if ( $content === false ) {
+            return array(
+                'imported' => 0,
+                'processed' => 0,
+                'message'  => sprintf( 'הקובץ עבור %s לא נמצא.', esc_html( $host_name ) ),
+            );
+        }
+
+        $rows = $this->parse_inventory_csv_content( $content );
+        if ( empty( $rows ) ) {
+            return array(
+                'imported' => 0,
+                'processed' => 0,
+                'message'  => sprintf( 'לא נמצאו שורות בקובץ עבור %s.', esc_html( $host_name ) ),
+            );
+        }
+
+        $imported = 0;
+        foreach ( $rows as $row ) {
+            $row['host_name'] = ! empty( $row['host_name'] ) ? $row['host_name'] : $host_name;
+            $this->save_inventory_row( $row );
+            $imported++;
+        }
+
+        return array(
+            'imported' => $imported,
+            'processed' => count( $rows ),
+            'message'  => sprintf( 'נטענו %d מתוך %d רשומות עבור %s.', $imported, count( $rows ), esc_html( $host_name ) ),
+        );
+    }
+
+    private function resolve_inventory_content( $host_name ) {
+        $safe_host = sanitize_file_name( $host_name );
+        $upload_dir = wp_upload_dir();
+        $paths = array(
+            trailingslashit( $upload_dir['basedir'] ) . 'servers/' . $safe_host . '.csv',
+            'c:\\xampp\\htdocs\\wp-content\\uploads\\servers\\' . $safe_host . '.csv',
+        );
+
+        foreach ( $paths as $path ) {
+            if ( file_exists( $path ) ) {
+                return file_get_contents( $path );
+            }
+        }
+
+        $urls = array(
+            trailingslashit( $upload_dir['baseurl'] ) . 'servers/' . rawurlencode( $safe_host ) . '.csv',
+            'https://kb.macomp.co.il/wp-content/uploads/servers/' . rawurlencode( $safe_host ) . '.csv',
+        );
+
+        foreach ( $urls as $url ) {
+            $response = wp_remote_get( $url );
+            if ( is_wp_error( $response ) ) {
+                continue;
+            }
+            $code = wp_remote_retrieve_response_code( $response );
+            if ( $code === 200 ) {
+                return wp_remote_retrieve_body( $response );
+            }
+        }
+
+        return false;
+    }
+
+    private function parse_inventory_csv_content( $content ) {
+        $rows = array();
+        $stream = fopen( 'php://temp', 'r+' );
+        fwrite( $stream, $content );
+        rewind( $stream );
+
+        $headers = array();
+        $row_num = 0;
+        while ( ( $data = fgetcsv( $stream ) ) !== false ) {
+            $row_num++;
+            if ( $row_num === 1 ) {
+                $headers = array_map( 'sanitize_key', $data );
+                continue;
+            }
+            $rows[] = $this->map_inventory_row( $headers, $data );
+        }
+        fclose( $stream );
+        return $rows;
+    }
+
+    private function map_inventory_row( $headers, $values ) {
+        $mapped = array();
+        foreach ( $headers as $index => $key ) {
+            $mapped[ $key ] = isset( $values[ $index ] ) ? $values[ $index ] : '';
+        }
+
+        return array(
+            'object_type' => isset( $mapped['objecttype'] ) ? sanitize_text_field( $mapped['objecttype'] ) : '',
+            'host_name'   => isset( $mapped['hostname'] ) ? sanitize_text_field( $mapped['hostname'] ) : '',
+            'vm_name'     => isset( $mapped['vmname'] ) ? sanitize_text_field( $mapped['vmname'] ) : '',
+            'memory_mb'   => isset( $mapped['memorymb'] ) ? intval( $mapped['memorymb'] ) : 0,
+            'nic1_name'   => isset( $mapped['nic1_name'] ) ? sanitize_text_field( $mapped['nic1_name'] ) : '',
+            'nic1_ip'     => isset( $mapped['nic1_ip'] ) ? sanitize_text_field( $mapped['nic1_ip'] ) : '',
+            'nic2_name'   => isset( $mapped['nic2_name'] ) ? sanitize_text_field( $mapped['nic2_name'] ) : '',
+            'nic2_ip'     => isset( $mapped['nic2_ip'] ) ? sanitize_text_field( $mapped['nic2_ip'] ) : '',
+            'nic3_name'   => isset( $mapped['nic3_name'] ) ? sanitize_text_field( $mapped['nic3_name'] ) : '',
+            'nic3_ip'     => isset( $mapped['nic3_ip'] ) ? sanitize_text_field( $mapped['nic3_ip'] ) : '',
+            'physicaldisk1_number' => isset( $mapped['physicaldisk1_number'] ) ? sanitize_text_field( $mapped['physicaldisk1_number'] ) : '',
+            'physicaldisk1_model'  => isset( $mapped['physicaldisk1_model'] ) ? sanitize_text_field( $mapped['physicaldisk1_model'] ) : '',
+            'physicaldisk1_sizegb' => isset( $mapped['physicaldisk1_sizegb'] ) ? sanitize_text_field( $mapped['physicaldisk1_sizegb'] ) : '',
+            'physicaldisk2_number' => isset( $mapped['physicaldisk2_number'] ) ? sanitize_text_field( $mapped['physicaldisk2_number'] ) : '',
+            'physicaldisk2_model'  => isset( $mapped['physicaldisk2_model'] ) ? sanitize_text_field( $mapped['physicaldisk2_model'] ) : '',
+            'physicaldisk2_sizegb' => isset( $mapped['physicaldisk2_sizegb'] ) ? sanitize_text_field( $mapped['physicaldisk2_sizegb'] ) : '',
+            'physicaldisk3_number' => isset( $mapped['physicaldisk3_number'] ) ? sanitize_text_field( $mapped['physicaldisk3_number'] ) : '',
+            'physicaldisk3_model'  => isset( $mapped['physicaldisk3_model'] ) ? sanitize_text_field( $mapped['physicaldisk3_model'] ) : '',
+            'physicaldisk3_sizegb' => isset( $mapped['physicaldisk3_sizegb'] ) ? sanitize_text_field( $mapped['physicaldisk3_sizegb'] ) : '',
+            'physicaldisk4_number' => isset( $mapped['physicaldisk4_number'] ) ? sanitize_text_field( $mapped['physicaldisk4_number'] ) : '',
+            'physicaldisk4_model'  => isset( $mapped['physicaldisk4_model'] ) ? sanitize_text_field( $mapped['physicaldisk4_model'] ) : '',
+            'physicaldisk4_sizegb' => isset( $mapped['physicaldisk4_sizegb'] ) ? sanitize_text_field( $mapped['physicaldisk4_sizegb'] ) : '',
+            'physicaldisk5_number' => isset( $mapped['physicaldisk5_number'] ) ? sanitize_text_field( $mapped['physicaldisk5_number'] ) : '',
+            'physicaldisk5_model'  => isset( $mapped['physicaldisk5_model'] ) ? sanitize_text_field( $mapped['physicaldisk5_model'] ) : '',
+            'physicaldisk5_sizegb' => isset( $mapped['physicaldisk5_sizegb'] ) ? sanitize_text_field( $mapped['physicaldisk5_sizegb'] ) : '',
+        );
+    }
+
+    private function save_inventory_row( $row ) {
+        global $wpdb;
+        $defaults = array(
+            'object_type' => '',
+            'host_name'   => '',
+            'vm_name'     => '',
+            'memory_mb'   => 0,
+            'nic1_name'   => '',
+            'nic1_ip'     => '',
+            'nic2_name'   => '',
+            'nic2_ip'     => '',
+            'nic3_name'   => '',
+            'nic3_ip'     => '',
+            'physicaldisk1_number' => '',
+            'physicaldisk1_model'  => '',
+            'physicaldisk1_sizegb' => '',
+            'physicaldisk2_number' => '',
+            'physicaldisk2_model'  => '',
+            'physicaldisk2_sizegb' => '',
+            'physicaldisk3_number' => '',
+            'physicaldisk3_model'  => '',
+            'physicaldisk3_sizegb' => '',
+            'physicaldisk4_number' => '',
+            'physicaldisk4_model'  => '',
+            'physicaldisk4_sizegb' => '',
+            'physicaldisk5_number' => '',
+            'physicaldisk5_model'  => '',
+            'physicaldisk5_sizegb' => '',
+        );
+
+        $data = array_merge( $defaults, $row );
+        $data['imported_at'] = current_time( 'mysql' );
+
+        $wpdb->replace(
+            $this->inventory_table,
+            $data,
+            array(
+                '%s','%s','%s','%d','%s','%s','%s','%s','%s','%s',
+                '%s','%s','%s','%s','%s','%s','%s','%s','%s','%s',
+                '%s','%s','%s','%s','%s','%s'
+            )
+        );
+    }
+
+    private function get_inventory_rows( $limit = 200 ) {
+        global $wpdb;
+        $limit = intval( $limit );
+        if ( $limit <= 0 ) {
+            $limit = 200;
+        }
+        return $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->inventory_table} ORDER BY host_name, vm_name LIMIT %d", $limit ) );
+    }
+
     public function handle_download_requests() {
         if ( empty( $_GET['dc_servers_export'] ) ) return;
 
@@ -930,6 +1236,9 @@ class DC_Servers_Manager {
         $farms     = $this->get_farms();
         $internal  = $this->get_internal_pool();
         $wans      = $this->get_wan_pool();
+        $inventory = $this->get_inventory_rows();
+        $inventory_notice = get_transient( 'dc_inventory_notice' );
+        delete_transient( 'dc_inventory_notice' );
 
         ob_start();
         ?>
@@ -940,6 +1249,17 @@ class DC_Servers_Manager {
                 <a class="button" href="https://kb.macomp.co.il/?page_id=14276">סל מחזור</a>
                 <a class="button" href="https://kb.macomp.co.il/?page_id=14270">רשימת שרתים</a>
             </div>
+
+            <?php if ( ! empty( $inventory_notice ) ) : ?>
+                <div class="notice notice-info" style="padding:12px 15px;">
+                    <?php if ( ! empty( $inventory_notice['messages'] ) ) : ?>
+                        <?php foreach ( $inventory_notice['messages'] as $msg ) : ?>
+                            <p><?php echo esc_html( $msg ); ?></p>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    <p><?php echo esc_html( sprintf( 'סה"כ: %d שורות, %d נטענו.', intval( $inventory_notice['processed'] ), intval( $inventory_notice['imported'] ) ) ); ?></p>
+                </div>
+            <?php endif; ?>
             <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:24px; align-items:flex-start;">
                 <div class="dc-settings-card">
                     <h2>Hyper-v Host</h2>
@@ -1068,6 +1388,54 @@ class DC_Servers_Manager {
                             <?php endforeach; ?>
                         </tbody>
                     </table>
+                </div>
+
+                <div class="dc-settings-card" style="grid-column:1 / -1;">
+                    <h2>ייבוא אוטומטי מ-CSV</h2>
+                    <p>הקבצים נמשכים מתוך wp-content/uploads/servers/&lt;HostName&gt;.csv (או מהנתיב המקומי). בחר "ייבוא כעת" כדי לטעון ידנית.</p>
+                    <p>הריצה האחרונה: <?php echo esc_html( get_option( 'dc_inventory_last_run', 'לא ידוע' ) ); ?></p>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-bottom:12px;">
+                        <?php wp_nonce_field( 'dc_inventory_import' ); ?>
+                        <input type="hidden" name="action" value="dc_import_inventory">
+                        <button class="button button-primary" type="submit">ייבוא כעת</button>
+                    </form>
+
+                    <div style="max-height:400px; overflow:auto;">
+                        <table class="widefat striped">
+                            <thead>
+                                <tr>
+                                    <th>Host</th>
+                                    <th>VM</th>
+                                    <th>Memory (MB)</th>
+                                    <th>NIC1 IP</th>
+                                    <th>NIC2 IP</th>
+                                    <th>NIC3 IP</th>
+                                    <th>Disk1 Size</th>
+                                    <th>Disk2 Size</th>
+                                    <th>עודכן</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if ( ! empty( $inventory ) ) : ?>
+                                    <?php foreach ( $inventory as $row ) : ?>
+                                        <tr>
+                                            <td><?php echo esc_html( $row->host_name ); ?></td>
+                                            <td><?php echo esc_html( $row->vm_name ); ?></td>
+                                            <td><?php echo esc_html( $row->memory_mb ); ?></td>
+                                            <td><?php echo esc_html( $row->nic1_ip ); ?></td>
+                                            <td><?php echo esc_html( $row->nic2_ip ); ?></td>
+                                            <td><?php echo esc_html( $row->nic3_ip ); ?></td>
+                                            <td><?php echo esc_html( $row->physicaldisk1_sizegb ); ?></td>
+                                            <td><?php echo esc_html( $row->physicaldisk2_sizegb ); ?></td>
+                                            <td><?php echo esc_html( $row->imported_at ); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php else : ?>
+                                    <tr><td colspan="9">לא קיימים נתונים מיובאים.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
