@@ -175,6 +175,28 @@
     transform: scale(1.1);
 }
 
+.dc-import-export {
+    margin-top: 20px;
+    padding: 16px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    background: #f8fafc;
+}
+
+.dc-import-export-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.dc-import-export input[type="file"] {
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 8px;
+    background: #fff;
+}
+
 @media (max-width: 640px) {
     .dc-search-form {
         flex-direction: column;
