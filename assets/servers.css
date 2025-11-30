@@ -4,8 +4,9 @@
     border-radius: 12px;
     padding: 20px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-    max-width: 1100px;
-    margin: 20px auto;
+    width: 100%;
+    max-width: none;
+    margin: 20px 0;
     font-family: 'Arial', sans-serif;
 }
 
@@ -182,6 +183,25 @@
     background: #f1f5f9;
     font-weight: 700;
     color: #111827;
+}
+
+.dc-table-modern .dc-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.dc-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 10px;
+    min-width: 36px;
+}
+
+.dc-btn-icon .dashicons {
+    line-height: 1;
 }
 
 .dc-table-modern tr:hover td {

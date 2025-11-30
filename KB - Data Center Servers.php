@@ -112,6 +112,7 @@ class DC_Servers_Manager {
             status VARCHAR(100) DEFAULT '',
             os_name VARCHAR(255) DEFAULT '',
             memory_mb BIGINT(20) NOT NULL DEFAULT 0,
+            cpu_cores BIGINT(20) NOT NULL DEFAULT 0,
             nic1_name VARCHAR(255) DEFAULT '',
             nic1_ip VARCHAR(45) DEFAULT '',
             nic2_name VARCHAR(255) DEFAULT '',
@@ -218,6 +219,7 @@ class DC_Servers_Manager {
                 status VARCHAR(100) DEFAULT '',
                 os_name VARCHAR(255) DEFAULT '',
                 memory_mb BIGINT(20) NOT NULL DEFAULT 0,
+                cpu_cores BIGINT(20) NOT NULL DEFAULT 0,
                 nic1_name VARCHAR(255) DEFAULT '',
                 nic1_ip VARCHAR(45) DEFAULT '',
                 nic2_name VARCHAR(255) DEFAULT '',
@@ -250,6 +252,7 @@ class DC_Servers_Manager {
             'vm_path' => "ALTER TABLE {$inventory_table} ADD COLUMN vm_path VARCHAR(255) DEFAULT '' AFTER vm_name",
             'status'  => "ALTER TABLE {$inventory_table} ADD COLUMN status VARCHAR(100) DEFAULT '' AFTER vm_path",
             'os_name' => "ALTER TABLE {$inventory_table} ADD COLUMN os_name VARCHAR(255) DEFAULT '' AFTER status",
+            'cpu_cores' => "ALTER TABLE {$inventory_table} ADD COLUMN cpu_cores BIGINT(20) NOT NULL DEFAULT 0 AFTER memory_mb",
         );
 
         foreach ( $inventory_new_columns as $column => $statement ) {
@@ -261,6 +264,8 @@ class DC_Servers_Manager {
     }
 
     public function enqueue_assets() {
+        wp_enqueue_style( 'dashicons' );
+
         wp_register_style(
             'dc-servers-css',
             plugins_url( 'assets/servers.css', __FILE__ ),
@@ -1019,6 +1024,7 @@ class DC_Servers_Manager {
             'status'      => sanitize_text_field( $status_val ),
             'os_name'     => isset( $mapped['os'] ) ? sanitize_text_field( $mapped['os'] ) : '',
             'memory_mb'   => isset( $mapped['memorymb'] ) ? intval( $mapped['memorymb'] ) : 0,
+            'cpu_cores'   => isset( $mapped['cpucores'] ) ? intval( $mapped['cpucores'] ) : 0,
             'nic1_name'   => isset( $mapped['nic1_name'] ) ? sanitize_text_field( $mapped['nic1_name'] ) : '',
             'nic1_ip'     => isset( $mapped['nic1_ip'] ) ? sanitize_text_field( $mapped['nic1_ip'] ) : '',
             'nic2_name'   => isset( $mapped['nic2_name'] ) ? sanitize_text_field( $mapped['nic2_name'] ) : '',
@@ -1053,6 +1059,7 @@ class DC_Servers_Manager {
             'status'      => '',
             'os_name'     => '',
             'memory_mb'   => 0,
+            'cpu_cores'   => 0,
             'nic1_name'   => '',
             'nic1_ip'     => '',
             'nic2_name'   => '',
@@ -1083,20 +1090,61 @@ class DC_Servers_Manager {
             $this->inventory_table,
             $data,
             array(
-                '%s','%s','%s','%s','%s','%s','%d','%s','%s','%s',
+                '%s','%s','%s','%s','%s','%s','%d','%d','%s','%s',
                 '%s','%s','%s','%s','%s','%s','%s','%s','%s','%s',
-                '%s','%s','%s','%s','%s','%s','%s','%s','%s'
+                '%s','%s','%s','%s','%s','%s','%s','%s','%s','%s'
             )
         );
     }
 
-    private function get_inventory_rows( $limit = 200 ) {
+    private function get_inventory_rows( $limit = 500 ) {
         global $wpdb;
         $limit = intval( $limit );
         if ( $limit <= 0 ) {
             $limit = 200;
         }
         return $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$this->inventory_table} ORDER BY host_name, vm_name LIMIT %d", $limit ) );
+    }
+
+    private function get_inventory_index( $limit = 1000 ) {
+        $rows  = $this->get_inventory_rows( $limit );
+        $index = array(
+            'host_vm' => array(),
+            'vm'      => array(),
+        );
+
+        foreach ( $rows as $row ) {
+            $host = strtolower( trim( $row->host_name ) );
+            $vm   = strtolower( trim( $row->vm_name ) );
+
+            if ( $host && $vm ) {
+                $index['host_vm'][ $host . '|' . $vm ] = $row;
+            }
+
+            if ( $vm && ! isset( $index['vm'][ $vm ] ) ) {
+                $index['vm'][ $vm ] = $row;
+            }
+        }
+
+        return $index;
+    }
+
+    private function find_inventory_for_server( $inventory_index, $server ) {
+        $host = isset( $server->location ) ? strtolower( trim( $server->location ) ) : '';
+        $vm   = isset( $server->server_name ) ? strtolower( trim( $server->server_name ) ) : '';
+
+        if ( $host && $vm ) {
+            $key = $host . '|' . $vm;
+            if ( isset( $inventory_index['host_vm'][ $key ] ) ) {
+                return $inventory_index['host_vm'][ $key ];
+            }
+        }
+
+        if ( $vm && isset( $inventory_index['vm'][ $vm ] ) ) {
+            return $inventory_index['vm'][ $vm ];
+        }
+
+        return null;
     }
 
     public function handle_download_requests() {
@@ -1344,21 +1392,20 @@ class DC_Servers_Manager {
             <table class="widefat striped dc-inventory-table">
                 <thead>
                     <tr>
-                        <th>Host / Path</th>
                         <th>VM Name</th>
-                        <th>NIC2 IP</th>
+                        <th>Hyper-v Host</th>
                         <th>סטטוס</th>
-                        <th>NIC2 Name</th>
-                        <th>NIC1 IP</th>
+                        <th>ליבות CPU</th>
                         <th>Memory (MB)</th>
-                        <th>OS</th>
+                        <th>NIC1 IP</th>
+                        <th>Disk1 (GB)</th>
+                        <th>VM Path</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ( ! empty( $inventory ) ) : ?>
                         <?php foreach ( $inventory as $row ) : ?>
                             <?php
-                            $main_label = ! empty( $row->vm_path ) ? $row->vm_path : $row->host_name;
                             $disks = array();
                             for ( $i = 1; $i <= 5; $i++ ) {
                                 $num   = isset( $row->{ 'physicaldisk' . $i . '_number' } ) ? $row->{ 'physicaldisk' . $i . '_number' } : '';
@@ -1371,14 +1418,14 @@ class DC_Servers_Manager {
                             }
                             ?>
                             <tr class="dc-inventory-row">
-                                <td><?php echo esc_html( $main_label ); ?></td>
                                 <td><?php echo esc_html( $row->vm_name ); ?></td>
-                                <td><?php echo esc_html( $row->nic2_ip ); ?></td>
+                                <td><?php echo esc_html( $row->host_name ); ?></td>
                                 <td><?php echo esc_html( $row->status ); ?></td>
-                                <td><?php echo esc_html( $row->nic2_name ); ?></td>
-                                <td><?php echo esc_html( $row->nic1_ip ); ?></td>
+                                <td><?php echo esc_html( $row->cpu_cores ); ?></td>
                                 <td><?php echo esc_html( $row->memory_mb ); ?></td>
-                                <td><?php echo esc_html( $row->os_name ); ?></td>
+                                <td><?php echo esc_html( $row->nic1_ip ); ?></td>
+                                <td><?php echo esc_html( $row->physicaldisk1_sizegb ); ?></td>
+                                <td><?php echo esc_html( $row->vm_path ); ?></td>
                             </tr>
                             <tr class="dc-inventory-details">
                                 <td colspan="8">
@@ -1387,6 +1434,9 @@ class DC_Servers_Manager {
                                         <div><strong>VM Path:</strong> <?php echo esc_html( $row->vm_path ); ?></div>
                                         <div><strong>Object Type:</strong> <?php echo esc_html( $row->object_type ); ?></div>
                                         <div><strong>סטטוס:</strong> <?php echo esc_html( $row->status ); ?></div>
+                                        <div><strong>OS:</strong> <?php echo esc_html( $row->os_name ); ?></div>
+                                        <div><strong>CPU:</strong> <?php echo esc_html( $row->cpu_cores ); ?></div>
+                                        <div><strong>זיכרון:</strong> <?php echo esc_html( $row->memory_mb ); ?> MB</div>
                                         <div><strong>NIC1:</strong> <?php echo esc_html( trim( $row->nic1_name . ' ' . $row->nic1_ip ) ); ?></div>
                                         <div><strong>NIC2:</strong> <?php echo esc_html( trim( $row->nic2_name . ' ' . $row->nic2_ip ) ); ?></div>
                                         <div><strong>NIC3:</strong> <?php echo esc_html( trim( $row->nic3_name . ' ' . $row->nic3_ip ) ); ?></div>
@@ -1707,7 +1757,7 @@ class DC_Servers_Manager {
         $next_internal     = $this->get_first_free_address( 'internal' );
         $next_wan          = $this->get_first_free_address( 'wan' );
         $free_internal_map = $this->get_internal_free_map();
-        $inventory         = $this->get_inventory_rows();
+        $inventory_index   = $this->get_inventory_index();
         $errors = get_transient( 'dc_servers_errors' );
         delete_transient( 'dc_servers_errors' );
 
@@ -1835,6 +1885,11 @@ class DC_Servers_Manager {
                             <th><a href="?dc_s_orderby=server_name&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">שם שרת</a></th>
                             <th><a href="?dc_s_orderby=ip_internal&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">IP פנימי</a></th>
                             <th><a href="?dc_s_orderby=ip_wan&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">IP WAN</a></th>
+                            <th>סטטוס</th>
+                            <th>ליבות CPU</th>
+                            <th>זיכרון (MB)</th>
+                            <th>NIC1 IP</th>
+                            <th>Disk1 (GB)</th>
                             <th>לקוח</th>
                             <th>Hyper-v Host</th>
                             <th>חווה</th>
@@ -1844,18 +1899,26 @@ class DC_Servers_Manager {
                     <tbody>
                         <?php if ( $servers ) : ?>
                             <?php foreach ( $servers as $s ) : ?>
+                                <?php $inventory_row = $this->find_inventory_for_server( $inventory_index, $s ); ?>
                                 <tr>
                                     <td><input type="checkbox" name="ids[]" value="<?php echo esc_attr( $s->id ); ?>"></td>
                                     <td><?php echo esc_html( $s->id ); ?></td>
                                     <td><?php echo esc_html( $s->server_name ); ?></td>
                                     <td><?php echo esc_html( $s->ip_internal ); ?></td>
                                     <td><?php echo esc_html( $s->ip_wan ); ?></td>
+                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->status : '' ); ?></td>
+                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->cpu_cores : '' ); ?></td>
+                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->memory_mb : '' ); ?></td>
+                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->nic1_ip : '' ); ?></td>
+                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->physicaldisk1_sizegb : '' ); ?></td>
                                     <td><?php echo esc_html( $s->customer_name . ' (' . $s->customer_number . ')' ); ?></td>
                                     <td><?php echo esc_html( $s->location ); ?></td>
                                     <td><?php echo esc_html( $s->farm ); ?></td>
-                                    <td>
+                                    <td class="dc-actions">
                                         <button type="button"
-                                                class="dc-btn-secondary dc-edit-server"
+                                                class="dc-btn-secondary dc-btn-icon dc-edit-server"
+                                                title="עריכה"
+                                                aria-label="עריכה"
                                                 data-id="<?php echo esc_attr( $s->id ); ?>"
                                                 data-customer_id="<?php echo esc_attr( $s->customer_id ); ?>"
                                                 data-customer_name="<?php echo esc_attr( $s->customer_name ); ?>"
@@ -1865,37 +1928,37 @@ class DC_Servers_Manager {
                                                 data-ip_wan="<?php echo esc_attr( $s->ip_wan ); ?>"
                                                 data-location="<?php echo esc_attr( $s->location ); ?>"
                                                 data-farm="<?php echo esc_attr( $s->farm ); ?>">
-                                            עריכה
+                                            <span class="dashicons dashicons-edit"></span>
                                         </button>
 
                                         <form method="post" style="display:inline;">
                                             <?php wp_nonce_field( 'dc_servers_action' ); ?>
                                             <input type="hidden" name="dc_servers_action" value="duplicate">
                                             <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                            <button type="submit" class="dc-btn-secondary">שיכפול</button>
+                                            <button type="submit" class="dc-btn-secondary dc-btn-icon" title="שיכפול" aria-label="שיכפול">
+                                                <span class="dashicons dashicons-admin-page"></span>
+                                            </button>
                                         </form>
 
                                         <form method="post" style="display:inline;">
                                             <?php wp_nonce_field( 'dc_servers_action' ); ?>
                                             <input type="hidden" name="dc_servers_action" value="soft_delete">
                                             <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                            <button type="submit" class="dc-btn-danger">מחיקה</button>
+                                            <button type="submit" class="dc-btn-danger dc-btn-icon" title="מחיקה" aria-label="מחיקה">
+                                                <span class="dashicons dashicons-trash"></span>
+                                            </button>
                                         </form>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else : ?>
-                            <tr><td colspan="9">לא נמצאו שרתים.</td></tr>
+                            <tr><td colspan="14">לא נמצאו שרתים.</td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
 
                 <button type="submit" class="dc-btn-danger">מחיקת רשומות מסומנות (לסל מחזור)</button>
             </form>
-
-            <h3>נתוני Inventory מ-CSV</h3>
-            <p class="dc-section-help">הטבלה מטענת אוטומטית את כל השדות מתוך קבצי ה-CSV הליליים ומציגה אותם כאן בעמוד הראשי.</p>
-            <?php echo $this->render_inventory_table_html( $inventory ); ?>
 
             <div class="dc-import-export">
                 <h3>ייבוא / ייצוא</h3>
