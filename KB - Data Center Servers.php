@@ -26,6 +26,7 @@ class DC_Servers_Manager {
 
         register_activation_hook( __FILE__, array( $this, 'activate' ) );
         add_shortcode( 'dc_servers_manager', array( $this, 'render_shortcode' ) );
+        add_shortcode( 'dc_servers_trash', array( $this, 'render_trash_shortcode' ) );
 
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'init', array( $this, 'handle_post_requests' ) );
@@ -65,6 +66,15 @@ class DC_Servers_Manager {
             '1.0.0'
         );
         wp_enqueue_style( 'dc-servers-css' );
+
+        wp_register_script(
+            'dc-servers-js',
+            plugins_url( 'assets/servers.js', __FILE__ ),
+            array(),
+            '1.0.0',
+            true
+        );
+        wp_enqueue_script( 'dc-servers-js' );
     }
 
     private function validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $id = null, &$errors = array() ) {
@@ -347,50 +357,58 @@ class DC_Servers_Manager {
                 <button type="submit">חיפוש</button>
             </form>
 
-            <h3>הוספת / עריכת שרת</h3>
-            <form method="post" class="dc-form-modern">
+            <div class="dc-form-header">
+                <h3 class="dc-form-title">הוספת / עריכת שרת</h3>
+                <button type="button" class="dc-btn-primary dc-toggle-form">שרת חדש</button>
+            </div>
+
+            <form method="post" class="dc-form-modern dc-form-collapsed">
                 <?php wp_nonce_field( 'dc_servers_action' ); ?>
                 <input type="hidden" name="dc_servers_action" value="add_or_update">
                 <input type="hidden" name="id" value="">
 
-                <div class="dc-field">
-                    <label>לקוח</label>
-                    <select name="customer_id" required>
-                        <option value="">בחר לקוח...</option>
-                        <?php foreach ( $customers as $c ) : ?>
-                            <option value="<?php echo esc_attr( $c->id ); ?>">
-                                <?php echo esc_html( $c->customer_name . ' (' . $c->customer_number . ')' ); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+                <div class="dc-form-grid">
+                    <div class="dc-field">
+                        <label>לקוח</label>
+                        <select name="customer_id" required>
+                            <option value="">בחר לקוח...</option>
+                            <?php foreach ( $customers as $c ) : ?>
+                                <option value="<?php echo esc_attr( $c->id ); ?>">
+                                    <?php echo esc_html( $c->customer_name . ' (' . $c->customer_number . ')' ); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>שם שרת</label>
+                        <input type="text" name="server_name" required>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>IP פנימי</label>
+                        <input type="text" name="ip_internal" required>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>IP WAN</label>
+                        <input type="text" name="ip_wan" required>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>מיקום</label>
+                        <input type="text" name="location">
+                    </div>
+
+                    <div class="dc-field">
+                        <label>חווה</label>
+                        <input type="text" name="farm">
+                    </div>
                 </div>
 
-                <div class="dc-field">
-                    <label>שם שרת</label>
-                    <input type="text" name="server_name" required>
+                <div class="dc-form-actions">
+                    <button type="submit" class="dc-btn-primary">שמירה</button>
                 </div>
-
-                <div class="dc-field">
-                    <label>IP פנימי</label>
-                    <input type="text" name="ip_internal" required>
-                </div>
-
-                <div class="dc-field">
-                    <label>IP WAN</label>
-                    <input type="text" name="ip_wan" required>
-                </div>
-
-                <div class="dc-field">
-                    <label>מיקום</label>
-                    <input type="text" name="location">
-                </div>
-
-                <div class="dc-field">
-                    <label>חווה</label>
-                    <input type="text" name="farm">
-                </div>
-
-                <button type="submit" class="dc-btn-primary">שמירה</button>
             </form>
 
             <h3>רשימת שרתים</h3>
@@ -460,6 +478,67 @@ class DC_Servers_Manager {
                 </table>
 
                 <button type="submit" class="dc-btn-danger">מחיקת רשומות מסומנות (לסל מחזור)</button>
+            </form>
+
+            <h3>סל מחזור</h3>
+            <table class="dc-table-modern dc-trash-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>שם שרת</th>
+                        <th>IP פנימי</th>
+                        <th>IP WAN</th>
+                        <th>לקוח</th>
+                        <th>נמחק בתאריך</th>
+                        <th>מחיקה לצמיתות</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $deleted_servers as $s ) : ?>
+                        <?php if ( ! $s->is_deleted ) continue; ?>
+                        <tr>
+                            <td><?php echo esc_html( $s->id ); ?></td>
+                            <td><?php echo esc_html( $s->server_name ); ?></td>
+                            <td><?php echo esc_html( $s->ip_internal ); ?></td>
+                            <td><?php echo esc_html( $s->ip_wan ); ?></td>
+                            <td><?php echo esc_html( $s->customer_name . ' (' . $s->customer_number . ')' ); ?></td>
+                            <td><?php echo esc_html( $s->deleted_at ); ?></td>
+                            <td>
+                                <form method="post">
+                                    <?php wp_nonce_field( 'dc_servers_action' ); ?>
+                                    <input type="hidden" name="dc_servers_action" value="delete_permanent">
+                                    <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
+                                    <button type="submit" class="dc-btn-danger">מחיקה לצמיתות</button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <form method="post">
+                <?php wp_nonce_field( 'dc_servers_action' ); ?>
+                <input type="hidden" name="dc_servers_action" value="delete_permanent_all">
+                <button type="submit" class="dc-btn-danger">מחיקת כל סל המחזור לצמיתות</button>
+            </form>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    public function render_trash_shortcode( $atts ) {
+        $search  = isset( $_GET['dc_s_search'] ) ? sanitize_text_field( $_GET['dc_s_search'] ) : '';
+        $orderby = isset( $_GET['dc_s_orderby'] ) ? sanitize_key( $_GET['dc_s_orderby'] ) : 'server_name';
+        $order   = isset( $_GET['dc_s_order'] ) ? sanitize_key( $_GET['dc_s_order'] )   : 'ASC';
+
+        $deleted_servers = $this->get_servers( true, $search, $orderby, $order );
+
+        ob_start();
+        ?>
+        <div class="dc-servers-wrap">
+            <form method="get" class="dc-search-form">
+                <input type="text" name="dc_s_search" value="<?php echo esc_attr( $search ); ?>" placeholder="חיפוש לפי שרת / IP / לקוח">
+                <button type="submit">חיפוש</button>
             </form>
 
             <h3>סל מחזור</h3>
