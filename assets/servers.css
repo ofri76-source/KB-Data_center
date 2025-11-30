@@ -1,0 +1,215 @@
+.dc-servers-wrap {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    max-width: 1100px;
+    margin: 20px auto;
+    font-family: 'Arial', sans-serif;
+}
+
+.dc-errors {
+    background: #fde2e1;
+    border: 1px solid #f5c2c0;
+    color: #7f1d1d;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+}
+
+.dc-search-form {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.dc-search-form input[type="text"] {
+    flex: 1;
+    border-radius: 999px;
+    border: 1px solid #d1d5db;
+    padding: 10px 14px;
+    font-size: 14px;
+}
+
+.dc-search-form button {
+    border-radius: 999px;
+    padding: 10px 18px;
+    border: none;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.dc-form-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin: 14px 0;
+}
+
+.dc-form-title {
+    margin: 0;
+}
+
+.dc-form-modern {
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 16px;
+    background: #f8fafc;
+    transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+    overflow: hidden;
+}
+
+.dc-form-modern.dc-form-collapsed {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+}
+
+.dc-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px 16px;
+}
+
+.dc-field label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #111827;
+}
+
+.dc-field input,
+.dc-field select {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 14px;
+    background: #fff;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.dc-field input:focus,
+.dc-field select:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.dc-form-actions {
+    margin-top: 12px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.dc-btn-primary,
+.dc-btn-secondary,
+.dc-btn-danger {
+    border: none;
+    border-radius: 999px;
+    padding: 10px 18px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 14px;
+    transition: transform 0.1s ease, box-shadow 0.2s ease;
+}
+
+.dc-btn-primary {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
+}
+
+.dc-btn-secondary {
+    background: #fff;
+    color: #1f2937;
+    border: 1px solid #d1d5db;
+}
+
+.dc-btn-danger {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: #fff;
+    box-shadow: 0 4px 10px rgba(239, 68, 68, 0.25);
+}
+
+.dc-btn-primary:hover,
+.dc-btn-secondary:hover,
+.dc-btn-danger:hover {
+    transform: translateY(-1px);
+}
+
+.dc-table-modern {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.dc-table-modern th,
+.dc-table-modern td {
+    padding: 12px 10px;
+    border-bottom: 1px solid #e5e7eb;
+    text-align: right;
+}
+
+.dc-table-modern th {
+    background: #f1f5f9;
+    font-weight: 700;
+    color: #111827;
+}
+
+.dc-table-modern tr:hover td {
+    background: #f8fafc;
+}
+
+.dc-table-modern input[type="checkbox"] {
+    transform: scale(1.1);
+}
+
+.dc-import-export {
+    margin-top: 20px;
+    padding: 16px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    background: #f8fafc;
+}
+
+.dc-import-export-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.dc-import-export input[type="file"] {
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 8px;
+    background: #fff;
+}
+
+@media (max-width: 640px) {
+    .dc-search-form {
+        flex-direction: column;
+    }
+
+    .dc-form-actions {
+        justify-content: stretch;
+    }
+
+    .dc-btn-primary,
+    .dc-btn-secondary,
+    .dc-btn-danger {
+        width: 100%;
+        text-align: center;
+    }
+}
