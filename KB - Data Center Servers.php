@@ -329,6 +329,101 @@ class DC_Servers_Manager {
         return $addresses;
     }
 
+    private function build_host_internal_ip( $host_name ) {
+        if ( preg_match( '/(\d+)/', $host_name, $matches ) ) {
+            $segment = intval( $matches[1] );
+            if ( $segment >= 0 && $segment <= 255 ) {
+                return '172.16.' . $segment . '.1';
+            }
+        }
+
+        return '';
+    }
+
+    private function ensure_host_location_and_pool( $host_name ) {
+        $host_name = sanitize_text_field( $host_name );
+        global $wpdb;
+        $location_table = $wpdb->prefix . 'dc_server_locations';
+        $internal_table = $wpdb->prefix . 'dc_server_internal_ips';
+
+        $location_id = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$location_table} WHERE name = %s", $host_name ) );
+
+        if ( ! $location_id ) {
+            $wpdb->insert(
+                $location_table,
+                array(
+                    'name'       => $host_name,
+                    'updated_at' => current_time( 'mysql' ),
+                ),
+                array( '%s','%s' )
+            );
+            $location_id = $wpdb->insert_id;
+        }
+
+        $host_ip = $this->build_host_internal_ip( $host_name );
+        if ( $host_ip === '' ) {
+            return;
+        }
+
+        $existing_ip = $wpdb->get_row( $wpdb->prepare( "SELECT id, location_id FROM {$internal_table} WHERE address = %s", $host_ip ) );
+
+        if ( $existing_ip ) {
+            if ( empty( $existing_ip->location_id ) ) {
+                $wpdb->update(
+                    $internal_table,
+                    array(
+                        'location_id' => $location_id,
+                        'updated_at'  => current_time( 'mysql' ),
+                    ),
+                    array( 'id' => $existing_ip->id ),
+                    array( '%d','%s' ),
+                    array( '%d' )
+                );
+            }
+            return;
+        }
+
+        $wpdb->insert(
+            $internal_table,
+            array(
+                'address'     => $host_ip,
+                'location_id' => $location_id,
+                'updated_at'  => current_time( 'mysql' ),
+            ),
+            array( '%s','%d','%s' )
+        );
+    }
+
+    private function discover_inventory_hosts() {
+        $hosts = array();
+        foreach ( $this->get_locations() as $loc ) {
+            $hosts[] = $loc->name;
+        }
+
+        $upload_dir = wp_upload_dir();
+        $patterns   = array(
+            trailingslashit( $upload_dir['basedir'] ) . 'servers/*_VMS.csv',
+            'c:\\xampp\\htdocs\\wp-content\\uploads\\servers\\*_VMS.csv',
+            trailingslashit( $upload_dir['basedir'] ) . 'servers/*.csv',
+            'c:\\xampp\\htdocs\\wp-content\\uploads\\servers\\*.csv',
+        );
+
+        foreach ( $patterns as $pattern ) {
+            foreach ( glob( $pattern ) as $file ) {
+                $base = basename( $file );
+                $name = preg_replace( '/(_VMS)?\.csv$/i', '', $base );
+                if ( $name !== '' ) {
+                    $hosts[] = $name;
+                }
+            }
+        }
+
+        $hosts = array_unique( array_filter( $hosts ) );
+        sort( $hosts );
+
+        return $hosts;
+    }
+
     private function validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $id = null, &$errors = array() ) {
         $server_name = trim( $server_name );
         $ip_internal = trim( $ip_internal );
@@ -784,20 +879,23 @@ class DC_Servers_Manager {
     }
 
     private function import_inventory_from_sources( $collect_messages = false ) {
-        $locations = $this->get_locations();
-        $messages  = array();
-        $imported  = 0;
+        $messages = array();
+        $imported = 0;
         $processed = 0;
 
-        if ( empty( $locations ) ) {
+        $hosts = $this->discover_inventory_hosts();
+
+        if ( empty( $hosts ) ) {
             if ( $collect_messages ) {
-                $messages[] = 'לא נמצאו Hyper-v Hosts לטעינה.';
+                $messages[] = 'לא נמצאו Hyper-v Hosts או קבצי CSV לטעינה.';
             }
             return array( 'messages' => $messages, 'imported' => 0, 'processed' => 0 );
         }
 
-        foreach ( $locations as $loc ) {
-            $result = $this->import_inventory_for_host( $loc->name );
+        foreach ( $hosts as $host_name ) {
+            $this->ensure_host_location_and_pool( $host_name );
+
+            $result = $this->import_inventory_for_host( $host_name );
             $imported += $result['imported'];
             $processed += $result['processed'];
 
@@ -1239,6 +1337,77 @@ class DC_Servers_Manager {
         return false;
     }
 
+    private function render_inventory_table_html( $inventory ) {
+        ob_start();
+        ?>
+        <div class="dc-inventory-table-wrap">
+            <table class="widefat striped dc-inventory-table">
+                <thead>
+                    <tr>
+                        <th>Host / Path</th>
+                        <th>VM Name</th>
+                        <th>NIC2 IP</th>
+                        <th>סטטוס</th>
+                        <th>NIC2 Name</th>
+                        <th>NIC1 IP</th>
+                        <th>Memory (MB)</th>
+                        <th>OS</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if ( ! empty( $inventory ) ) : ?>
+                        <?php foreach ( $inventory as $row ) : ?>
+                            <?php
+                            $main_label = ! empty( $row->vm_path ) ? $row->vm_path : $row->host_name;
+                            $disks = array();
+                            for ( $i = 1; $i <= 5; $i++ ) {
+                                $num   = isset( $row->{ 'physicaldisk' . $i . '_number' } ) ? $row->{ 'physicaldisk' . $i . '_number' } : '';
+                                $model = isset( $row->{ 'physicaldisk' . $i . '_model' } ) ? $row->{ 'physicaldisk' . $i . '_model' } : '';
+                                $size  = isset( $row->{ 'physicaldisk' . $i . '_sizegb' } ) ? $row->{ 'physicaldisk' . $i . '_sizegb' } : '';
+                                if ( $num || $model || $size ) {
+                                    $label = trim( implode( ' ', array_filter( array( '#' . ( $num ? $num : $i ), $model, $size ) ) ) );
+                                    $disks[] = $label;
+                                }
+                            }
+                            ?>
+                            <tr class="dc-inventory-row">
+                                <td><?php echo esc_html( $main_label ); ?></td>
+                                <td><?php echo esc_html( $row->vm_name ); ?></td>
+                                <td><?php echo esc_html( $row->nic2_ip ); ?></td>
+                                <td><?php echo esc_html( $row->status ); ?></td>
+                                <td><?php echo esc_html( $row->nic2_name ); ?></td>
+                                <td><?php echo esc_html( $row->nic1_ip ); ?></td>
+                                <td><?php echo esc_html( $row->memory_mb ); ?></td>
+                                <td><?php echo esc_html( $row->os_name ); ?></td>
+                            </tr>
+                            <tr class="dc-inventory-details">
+                                <td colspan="8">
+                                    <div class="dc-inventory-detail-grid">
+                                        <div><strong>Host:</strong> <?php echo esc_html( $row->host_name ); ?></div>
+                                        <div><strong>VM Path:</strong> <?php echo esc_html( $row->vm_path ); ?></div>
+                                        <div><strong>Object Type:</strong> <?php echo esc_html( $row->object_type ); ?></div>
+                                        <div><strong>סטטוס:</strong> <?php echo esc_html( $row->status ); ?></div>
+                                        <div><strong>NIC1:</strong> <?php echo esc_html( trim( $row->nic1_name . ' ' . $row->nic1_ip ) ); ?></div>
+                                        <div><strong>NIC2:</strong> <?php echo esc_html( trim( $row->nic2_name . ' ' . $row->nic2_ip ) ); ?></div>
+                                        <div><strong>NIC3:</strong> <?php echo esc_html( trim( $row->nic3_name . ' ' . $row->nic3_ip ) ); ?></div>
+                                        <div><strong>עודכן:</strong> <?php echo esc_html( $row->imported_at ); ?></div>
+                                    </div>
+                                    <?php if ( ! empty( $disks ) ) : ?>
+                                        <div class="dc-inventory-disks"><strong>דיסקים:</strong> <?php echo esc_html( implode( ', ', $disks ) ); ?></div>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else : ?>
+                        <tr><td colspan="8">לא קיימים נתונים מיובאים.</td></tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
     public function register_admin_menu() {
         add_menu_page(
             'DC Servers Settings',
@@ -1431,70 +1600,7 @@ class DC_Servers_Manager {
                         <button class="button button-primary" type="submit">ייבוא כעת</button>
                     </form>
 
-                    <div class="dc-inventory-table-wrap">
-                        <table class="widefat striped dc-inventory-table">
-                            <thead>
-                                <tr>
-                                    <th>Host / Path</th>
-                                    <th>VM Name</th>
-                                    <th>NIC2 IP</th>
-                                    <th>סטטוס</th>
-                                    <th>NIC2 Name</th>
-                                    <th>NIC1 IP</th>
-                                    <th>Memory (MB)</th>
-                                    <th>OS</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if ( ! empty( $inventory ) ) : ?>
-                                    <?php foreach ( $inventory as $row ) : ?>
-                                        <?php
-                                        $main_label = ! empty( $row->vm_path ) ? $row->vm_path : $row->host_name;
-                                        $disks = array();
-                                        for ( $i = 1; $i <= 5; $i++ ) {
-                                            $num   = isset( $row->{ 'physicaldisk' . $i . '_number' } ) ? $row->{ 'physicaldisk' . $i . '_number' } : '';
-                                            $model = isset( $row->{ 'physicaldisk' . $i . '_model' } ) ? $row->{ 'physicaldisk' . $i . '_model' } : '';
-                                            $size  = isset( $row->{ 'physicaldisk' . $i . '_sizegb' } ) ? $row->{ 'physicaldisk' . $i . '_sizegb' } : '';
-                                            if ( $num || $model || $size ) {
-                                                $label = trim( implode( ' ', array_filter( array( '#' . ( $num ? $num : $i ), $model, $size ) ) ) );
-                                                $disks[] = $label;
-                                            }
-                                        }
-                                        ?>
-                                        <tr class="dc-inventory-row">
-                                            <td><?php echo esc_html( $main_label ); ?></td>
-                                            <td><?php echo esc_html( $row->vm_name ); ?></td>
-                                            <td><?php echo esc_html( $row->nic2_ip ); ?></td>
-                                            <td><?php echo esc_html( $row->status ); ?></td>
-                                            <td><?php echo esc_html( $row->nic2_name ); ?></td>
-                                            <td><?php echo esc_html( $row->nic1_ip ); ?></td>
-                                            <td><?php echo esc_html( $row->memory_mb ); ?></td>
-                                            <td><?php echo esc_html( $row->os_name ); ?></td>
-                                        </tr>
-                                        <tr class="dc-inventory-details">
-                                            <td colspan="8">
-                                                <div class="dc-inventory-detail-grid">
-                                                    <div><strong>Host:</strong> <?php echo esc_html( $row->host_name ); ?></div>
-                                                    <div><strong>VM Path:</strong> <?php echo esc_html( $row->vm_path ); ?></div>
-                                                    <div><strong>Object Type:</strong> <?php echo esc_html( $row->object_type ); ?></div>
-                                                    <div><strong>סטטוס:</strong> <?php echo esc_html( $row->status ); ?></div>
-                                                    <div><strong>NIC1:</strong> <?php echo esc_html( trim( $row->nic1_name . ' ' . $row->nic1_ip ) ); ?></div>
-                                                    <div><strong>NIC2:</strong> <?php echo esc_html( trim( $row->nic2_name . ' ' . $row->nic2_ip ) ); ?></div>
-                                                    <div><strong>NIC3:</strong> <?php echo esc_html( trim( $row->nic3_name . ' ' . $row->nic3_ip ) ); ?></div>
-                                                    <div><strong>עודכן:</strong> <?php echo esc_html( $row->imported_at ); ?></div>
-                                                </div>
-                                                <?php if ( ! empty( $disks ) ) : ?>
-                                                    <div class="dc-inventory-disks"><strong>דיסקים:</strong> <?php echo esc_html( implode( ', ', $disks ) ); ?></div>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                <?php else : ?>
-                                    <tr><td colspan="8">לא קיימים נתונים מיובאים.</td></tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
+                    <?php echo $this->render_inventory_table_html( $inventory ); ?>
                 </div>
             </div>
         </div>
@@ -1601,6 +1707,7 @@ class DC_Servers_Manager {
         $next_internal     = $this->get_first_free_address( 'internal' );
         $next_wan          = $this->get_first_free_address( 'wan' );
         $free_internal_map = $this->get_internal_free_map();
+        $inventory         = $this->get_inventory_rows();
         $errors = get_transient( 'dc_servers_errors' );
         delete_transient( 'dc_servers_errors' );
 
@@ -1785,6 +1892,10 @@ class DC_Servers_Manager {
 
                 <button type="submit" class="dc-btn-danger">מחיקת רשומות מסומנות (לסל מחזור)</button>
             </form>
+
+            <h3>נתוני Inventory מ-CSV</h3>
+            <p class="dc-section-help">הטבלה מטענת אוטומטית את כל השדות מתוך קבצי ה-CSV הליליים ומציגה אותם כאן בעמוד הראשי.</p>
+            <?php echo $this->render_inventory_table_html( $inventory ); ?>
 
             <div class="dc-import-export">
                 <h3>ייבוא / ייצוא</h3>
