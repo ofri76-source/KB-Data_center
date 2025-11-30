@@ -8,11 +8,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const customerIdField = wrap.querySelector('input[name="customer_id"]');
         const customerNameInput = wrap.querySelector('input[name="customer_name_search"]');
         const customerNumberInput = wrap.querySelector('input[name="customer_number_search"]');
+        const ipPool = wrap.querySelector('.dc-ip-pool');
+        const ipInternalInput = wrap.querySelector('input[name="ip_internal"]');
+        const ipWanInput = wrap.querySelector('input[name="ip_wan"]');
+        const fillInternalBtn = wrap.querySelector('.dc-fill-next-internal');
+        const fillWanBtn = wrap.querySelector('.dc-fill-next-wan');
         const customerOptions = Array.from(wrap.querySelectorAll('.dc-customer-option')).map((opt) => ({
             id: opt.dataset.id,
             name: opt.dataset.name,
             number: opt.dataset.number,
         }));
+        const availableInternal = ipPool?.dataset?.availableInternal ? JSON.parse(ipPool.dataset.availableInternal) : [];
+        const availableWan = ipPool?.dataset?.availableWan ? JSON.parse(ipPool.dataset.availableWan) : [];
+        const nextInternal = ipPool?.dataset?.nextInternal || '';
+        const nextWan = ipPool?.dataset?.nextWan || '';
         const ensureOptionExists = (select, value) => {
             if (!select || !value) return;
             const found = Array.from(select.options).some((opt) => opt.value === value);
@@ -44,6 +53,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (customerIdField) {
                 customerIdField.value = '';
+            }
+            if (ipInternalInput && nextInternal) {
+                ipInternalInput.value = nextInternal;
+            }
+            if (ipWanInput && nextWan) {
+                ipWanInput.value = nextWan;
             }
             setFormState('expanded');
         };
@@ -94,6 +109,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 form.scrollIntoView({ behavior: 'smooth', block: 'start' });
             });
         });
+
+        const pickNextAvailable = (type) => {
+            if (type === 'internal') {
+                if (ipInternalInput && nextInternal) {
+                    ipInternalInput.value = nextInternal;
+                } else if (ipInternalInput && availableInternal.length) {
+                    ipInternalInput.value = availableInternal[0];
+                }
+            } else if (type === 'wan') {
+                if (ipWanInput && nextWan) {
+                    ipWanInput.value = nextWan;
+                } else if (ipWanInput && availableWan.length) {
+                    ipWanInput.value = availableWan[0];
+                }
+            }
+        };
+
+        if (fillInternalBtn) {
+            fillInternalBtn.addEventListener('click', () => pickNextAvailable('internal'));
+        }
+
+        if (fillWanBtn) {
+            fillWanBtn.addEventListener('click', () => pickNextAvailable('wan'));
+        }
 
         if (selectAll) {
             selectAll.addEventListener('change', () => {

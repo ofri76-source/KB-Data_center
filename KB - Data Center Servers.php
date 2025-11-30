@@ -78,14 +78,34 @@ class DC_Servers_Manager {
             UNIQUE KEY unique_farm_name (name)
         ) $charset_collate;";
 
+        $internal_sql = "CREATE TABLE {$wpdb->prefix}dc_server_internal_ips (
+            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            address VARCHAR(255) NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY unique_internal_ip_address (address)
+        ) $charset_collate;";
+
+        $wan_sql = "CREATE TABLE {$wpdb->prefix}dc_server_wan_addresses (
+            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            address VARCHAR(255) NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY unique_wan_ip_address (address)
+        ) $charset_collate;";
+
         dbDelta( $lookup_sql );
         dbDelta( $farm_sql );
+        dbDelta( $internal_sql );
+        dbDelta( $wan_sql );
     }
 
     public function maybe_create_lookup_tables() {
         global $wpdb;
         $location_table = $wpdb->prefix . 'dc_server_locations';
         $farm_table     = $wpdb->prefix . 'dc_server_farms';
+        $internal_table = $wpdb->prefix . 'dc_server_internal_ips';
+        $wan_table      = $wpdb->prefix . 'dc_server_wan_addresses';
         $charset_collate = $wpdb->get_charset_collate();
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -108,6 +128,28 @@ class DC_Servers_Manager {
                 updated_at DATETIME NOT NULL,
                 PRIMARY KEY (id),
                 UNIQUE KEY unique_farm_name (name)
+            ) {$charset_collate};";
+            dbDelta( $sql );
+        }
+
+        if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $internal_table ) ) !== $internal_table ) {
+            $sql = "CREATE TABLE {$internal_table} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                address VARCHAR(255) NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY (id),
+                UNIQUE KEY unique_internal_ip_address (address)
+            ) {$charset_collate};";
+            dbDelta( $sql );
+        }
+
+        if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wan_table ) ) !== $wan_table ) {
+            $sql = "CREATE TABLE {$wan_table} (
+                id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+                address VARCHAR(255) NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY (id),
+                UNIQUE KEY unique_wan_ip_address (address)
             ) {$charset_collate};";
             dbDelta( $sql );
         }
@@ -158,6 +200,16 @@ class DC_Servers_Manager {
         if ( ! empty( $errors ) ) return false;
 
         global $wpdb;
+
+        if ( ! $this->is_address_allowed( 'internal', $ip_internal ) ) {
+            $errors[] = 'כתובת ה-IP הפנימית חייבת להיבחר מטבלת הכתובות או להתווסף שם ידנית.';
+        }
+
+        if ( ! $this->is_address_allowed( 'wan', $ip_wan ) ) {
+            $errors[] = 'כתובת ה-WAN חייבת להיבחר מטבלת הכתובות או להתווסף שם ידנית.';
+        }
+
+        if ( ! empty( $errors ) ) return false;
 
         // בדיקת כפילות ip_internal
         $query  = "SELECT id FROM {$this->table_name} WHERE ip_internal = %s";
@@ -638,6 +690,43 @@ class DC_Servers_Manager {
         return $wpdb->get_results( "SELECT * FROM {$table} ORDER BY name ASC" );
     }
 
+    private function get_internal_pool() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'dc_server_internal_ips';
+        return $wpdb->get_results( "SELECT * FROM {$table} ORDER BY address ASC" );
+    }
+
+    private function get_wan_pool() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'dc_server_wan_addresses';
+        return $wpdb->get_results( "SELECT * FROM {$table} ORDER BY address ASC" );
+    }
+
+    private function get_first_free_address( $type ) {
+        global $wpdb;
+        $pool  = $type === 'internal' ? $this->get_internal_pool() : $this->get_wan_pool();
+        $field = $type === 'internal' ? 'ip_internal' : 'ip_wan';
+
+        if ( empty( $pool ) ) {
+            return '';
+        }
+
+        $in_use = $wpdb->get_col( "SELECT DISTINCT {$field} FROM {$this->table_name}" );
+        $addresses = wp_list_pluck( $pool, 'address' );
+        $free      = array_values( array_diff( $addresses, $in_use ) );
+
+        return isset( $free[0] ) ? $free[0] : '';
+    }
+
+    private function is_address_allowed( $type, $address ) {
+        $pool = $type === 'internal' ? $this->get_internal_pool() : $this->get_wan_pool();
+        if ( empty( $pool ) ) {
+            return true;
+        }
+        $addresses = wp_list_pluck( $pool, 'address' );
+        return in_array( $address, $addresses, true );
+    }
+
     public function register_admin_menu() {
         add_menu_page(
             'DC Servers Settings',
@@ -656,11 +745,13 @@ class DC_Servers_Manager {
 
         $locations = $this->get_locations();
         $farms     = $this->get_farms();
+        $internal  = $this->get_internal_pool();
+        $wans      = $this->get_wan_pool();
         ?>
         <div class="wrap">
             <h1>הגדרות שרתים</h1>
-            <div style="display:flex; gap:24px; align-items:flex-start;">
-                <div style="flex:1;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:24px; align-items:flex-start;">
+                <div class="dc-settings-card">
                     <h2>טבלת מיקום</h2>
                     <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                         <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
@@ -689,7 +780,8 @@ class DC_Servers_Manager {
                         </tbody>
                     </table>
                 </div>
-                <div style="flex:1;">
+
+                <div class="dc-settings-card">
                     <h2>טבלת חווה</h2>
                     <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                         <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
@@ -718,6 +810,66 @@ class DC_Servers_Manager {
                         </tbody>
                     </table>
                 </div>
+
+                <div class="dc-settings-card">
+                    <h2>טבלת כתובות IP פנימי</h2>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                        <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
+                        <input type="hidden" name="action" value="dc_save_lookup">
+                        <input type="hidden" name="lookup_type" value="internal_ip">
+                        <input type="text" name="name" placeholder="לדוגמה: 10.0.0.1" required style="width:100%;max-width:320px;">
+                        <button class="button button-primary" type="submit">הוספה</button>
+                    </form>
+                    <table class="widefat striped" style="margin-top:12px;">
+                        <thead><tr><th>כתובת</th><th>פעולות</th></tr></thead>
+                        <tbody>
+                            <?php foreach ( $internal as $addr ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $addr->address ); ?></td>
+                                    <td>
+                                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;">
+                                            <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
+                                            <input type="hidden" name="action" value="dc_delete_lookup">
+                                            <input type="hidden" name="lookup_type" value="internal_ip">
+                                            <input type="hidden" name="id" value="<?php echo esc_attr( $addr->id ); ?>">
+                                            <button class="button button-link-delete" type="submit">מחיקה</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="dc-settings-card">
+                    <h2>טבלת כתובות WAN</h2>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                        <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
+                        <input type="hidden" name="action" value="dc_save_lookup">
+                        <input type="hidden" name="lookup_type" value="wan">
+                        <input type="text" name="name" placeholder="לדוגמה: 8.8.8.8" required style="width:100%;max-width:320px;">
+                        <button class="button button-primary" type="submit">הוספה</button>
+                    </form>
+                    <table class="widefat striped" style="margin-top:12px;">
+                        <thead><tr><th>כתובת</th><th>פעולות</th></tr></thead>
+                        <tbody>
+                            <?php foreach ( $wans as $addr ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $addr->address ); ?></td>
+                                    <td>
+                                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;">
+                                            <?php wp_nonce_field( 'dc_lookup_action', '_wpnonce' ); ?>
+                                            <input type="hidden" name="action" value="dc_delete_lookup">
+                                            <input type="hidden" name="lookup_type" value="wan">
+                                            <input type="hidden" name="id" value="<?php echo esc_attr( $addr->id ); ?>">
+                                            <button class="button button-link-delete" type="submit">מחיקה</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
         <?php
@@ -733,14 +885,22 @@ class DC_Servers_Manager {
 
         $type = isset( $_POST['lookup_type'] ) ? sanitize_key( $_POST['lookup_type'] ) : '';
         $name = isset( $_POST['name'] ) ? sanitize_text_field( $_POST['name'] ) : '';
-        if ( ! in_array( $type, array( 'location', 'farm' ), true ) || $name === '' ) {
+        if ( ! in_array( $type, array( 'location', 'farm', 'internal_ip', 'wan' ), true ) || $name === '' ) {
             wp_safe_redirect( admin_url( 'admin.php?page=dc-servers-settings' ) );
             exit;
         }
 
+        if ( in_array( $type, array( 'internal_ip', 'wan' ), true ) && ! filter_var( $name, FILTER_VALIDATE_IP ) ) {
+            wp_safe_redirect( admin_url( 'admin.php?page=dc-servers-settings&dc_error=invalid_ip' ) );
+            exit;
+        }
+
         global $wpdb;
-        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations' : $wpdb->prefix . 'dc_server_farms';
-        $wpdb->replace( $table, array( 'name' => $name, 'updated_at' => current_time( 'mysql' ) ), array( '%s','%s' ) );
+        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations'
+            : ( $type === 'farm' ? $wpdb->prefix . 'dc_server_farms'
+            : ( $type === 'internal_ip' ? $wpdb->prefix . 'dc_server_internal_ips' : $wpdb->prefix . 'dc_server_wan_addresses' ) );
+        $column = in_array( $type, array( 'internal_ip', 'wan' ), true ) ? 'address' : 'name';
+        $wpdb->replace( $table, array( $column => $name, 'updated_at' => current_time( 'mysql' ) ), array( '%s','%s' ) );
         wp_safe_redirect( admin_url( 'admin.php?page=dc-servers-settings' ) );
         exit;
     }
@@ -755,13 +915,15 @@ class DC_Servers_Manager {
 
         $type = isset( $_POST['lookup_type'] ) ? sanitize_key( $_POST['lookup_type'] ) : '';
         $id   = isset( $_POST['id'] ) ? intval( $_POST['id'] ) : 0;
-        if ( ! in_array( $type, array( 'location', 'farm' ), true ) || ! $id ) {
+        if ( ! in_array( $type, array( 'location', 'farm', 'internal_ip', 'wan' ), true ) || ! $id ) {
             wp_safe_redirect( admin_url( 'admin.php?page=dc-servers-settings' ) );
             exit;
         }
 
         global $wpdb;
-        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations' : $wpdb->prefix . 'dc_server_farms';
+        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations'
+            : ( $type === 'farm' ? $wpdb->prefix . 'dc_server_farms'
+            : ( $type === 'internal_ip' ? $wpdb->prefix . 'dc_server_internal_ips' : $wpdb->prefix . 'dc_server_wan_addresses' ) );
         $wpdb->delete( $table, array( 'id' => $id ), array( '%d' ) );
         wp_safe_redirect( admin_url( 'admin.php?page=dc-servers-settings' ) );
         exit;
@@ -779,8 +941,12 @@ class DC_Servers_Manager {
         $customers         = DC_Customers_Manager::get_all_customers();
         $locations         = $this->get_locations();
         $farms             = $this->get_farms();
+        $internal_pool     = $this->get_internal_pool();
+        $wan_pool          = $this->get_wan_pool();
         $servers           = $this->get_servers( false, $search, $orderby, $order );
         $deleted_servers   = $this->get_servers( true,  $search, $orderby, $order );
+        $next_internal     = $this->get_first_free_address( 'internal' );
+        $next_wan          = $this->get_first_free_address( 'wan' );
         $errors = get_transient( 'dc_servers_errors' );
         delete_transient( 'dc_servers_errors' );
 
@@ -806,6 +972,7 @@ class DC_Servers_Manager {
             </div>
 
             <form method="post" class="dc-form-modern dc-form-collapsed">
+                <input type="hidden" class="dc-ip-pool" data-available-internal='<?php echo esc_attr( wp_json_encode( wp_list_pluck( $internal_pool, 'address' ) ) ); ?>' data-available-wan='<?php echo esc_attr( wp_json_encode( wp_list_pluck( $wan_pool, 'address' ) ) ); ?>' data-next-internal="<?php echo esc_attr( $next_internal ); ?>" data-next-wan="<?php echo esc_attr( $next_wan ); ?>">
                 <?php wp_nonce_field( 'dc_servers_action' ); ?>
                 <input type="hidden" name="dc_servers_action" value="add_or_update">
                 <input type="hidden" name="id" value="">
@@ -838,12 +1005,28 @@ class DC_Servers_Manager {
 
                     <div class="dc-field">
                         <label>IP פנימי</label>
-                        <input type="text" name="ip_internal" required>
+                        <div class="dc-input-with-action">
+                            <input type="text" name="ip_internal" list="dc-ip-internal-list" required>
+                            <button type="button" class="dc-btn-secondary dc-fill-next-internal">כתובת פנימית פנויה</button>
+                        </div>
+                        <datalist id="dc-ip-internal-list">
+                            <?php foreach ( $internal_pool as $addr ) : ?>
+                                <option value="<?php echo esc_attr( $addr->address ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
                     </div>
 
                     <div class="dc-field">
                         <label>IP WAN</label>
-                        <input type="text" name="ip_wan" required>
+                        <div class="dc-input-with-action">
+                            <input type="text" name="ip_wan" list="dc-ip-wan-list" required>
+                            <button type="button" class="dc-btn-secondary dc-fill-next-wan">כתובת WAN פנויה</button>
+                        </div>
+                        <datalist id="dc-ip-wan-list">
+                            <?php foreach ( $wan_pool as $addr ) : ?>
+                                <option value="<?php echo esc_attr( $addr->address ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
                     </div>
 
                     <div class="dc-field">
@@ -1000,67 +1183,6 @@ class DC_Servers_Manager {
                     <a class="dc-btn-secondary" href="<?php echo esc_url( add_query_arg( array( 'dc_servers_export' => 'excel', '_wpnonce' => $export_nonce ) ) ); ?>">ייצוא Excel</a>
                 </div>
             </div>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
-
-    public function render_trash_shortcode( $atts ) {
-        $search  = isset( $_GET['dc_s_search'] ) ? sanitize_text_field( $_GET['dc_s_search'] ) : '';
-        $orderby = isset( $_GET['dc_s_orderby'] ) ? sanitize_key( $_GET['dc_s_orderby'] ) : 'server_name';
-        $order   = isset( $_GET['dc_s_order'] ) ? sanitize_key( $_GET['dc_s_order'] )   : 'ASC';
-
-        $deleted_servers = $this->get_servers( true, $search, $orderby, $order );
-
-        ob_start();
-        ?>
-        <div class="dc-servers-wrap">
-            <form method="get" class="dc-search-form">
-                <input type="text" name="dc_s_search" value="<?php echo esc_attr( $search ); ?>" placeholder="חיפוש לפי שרת / IP / לקוח">
-                <button type="submit">חיפוש</button>
-            </form>
-
-            <h3>סל מחזור</h3>
-            <table class="dc-table-modern dc-trash-table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>שם שרת</th>
-                        <th>IP פנימי</th>
-                        <th>IP WAN</th>
-                        <th>לקוח</th>
-                        <th>נמחק בתאריך</th>
-                        <th>מחיקה לצמיתות</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ( $deleted_servers as $s ) : ?>
-                        <?php if ( ! $s->is_deleted ) continue; ?>
-                        <tr>
-                            <td><?php echo esc_html( $s->id ); ?></td>
-                            <td><?php echo esc_html( $s->server_name ); ?></td>
-                            <td><?php echo esc_html( $s->ip_internal ); ?></td>
-                            <td><?php echo esc_html( $s->ip_wan ); ?></td>
-                            <td><?php echo esc_html( $s->customer_name . ' (' . $s->customer_number . ')' ); ?></td>
-                            <td><?php echo esc_html( $s->deleted_at ); ?></td>
-                            <td>
-                                <form method="post">
-                                    <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                                    <input type="hidden" name="dc_servers_action" value="delete_permanent">
-                                    <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                    <button type="submit" class="dc-btn-danger">מחיקה לצמיתות</button>
-                                </form>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-
-            <form method="post">
-                <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                <input type="hidden" name="dc_servers_action" value="delete_permanent_all">
-                <button type="submit" class="dc-btn-danger">מחיקת כל סל המחזור לצמיתות</button>
-            </form>
         </div>
         <?php
         return ob_get_clean();

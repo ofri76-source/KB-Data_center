@@ -102,6 +102,16 @@
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
+.dc-input-with-action {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.dc-input-with-action input {
+    flex: 1;
+}
+
 .dc-form-actions {
     margin-top: 12px;
     display: flex;
@@ -173,6 +183,14 @@
 
 .dc-table-modern input[type="checkbox"] {
     transform: scale(1.1);
+}
+
+.dc-settings-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
 .dc-import-export {
