@@ -27,6 +27,7 @@ class DC_Servers_Manager {
         register_activation_hook( __FILE__, array( $this, 'activate' ) );
         add_shortcode( 'dc_servers_manager', array( $this, 'render_shortcode' ) );
         add_shortcode( 'dc_servers_trash', array( $this, 'render_trash_shortcode' ) );
+        add_shortcode( 'dc_servers_settings', array( $this, 'render_settings_shortcode' ) );
 
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'init', array( $this, 'handle_post_requests' ) );
@@ -593,7 +594,7 @@ class DC_Servers_Manager {
         return 0;
     }
 
-    private function handle_download_requests() {
+    public function handle_download_requests() {
         if ( empty( $_GET['dc_servers_export'] ) ) return;
 
         $type = sanitize_key( $_GET['dc_servers_export'] );
@@ -739,14 +740,24 @@ class DC_Servers_Manager {
     }
 
     public function render_settings_page() {
+        echo $this->render_settings_content();
+    }
+
+    public function render_settings_shortcode( $atts ) {
+        return $this->render_settings_content();
+    }
+
+    private function render_settings_content() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            return;
+            return '<div class="wrap"><p>אין לך הרשאות לצפות בעמוד זה.</p></div>';
         }
 
         $locations = $this->get_locations();
         $farms     = $this->get_farms();
         $internal  = $this->get_internal_pool();
         $wans      = $this->get_wan_pool();
+
+        ob_start();
         ?>
         <div class="wrap">
             <h1>הגדרות שרתים</h1>
@@ -873,6 +884,7 @@ class DC_Servers_Manager {
             </div>
         </div>
         <?php
+        return ob_get_clean();
     }
 
     public function handle_save_lookup() {
