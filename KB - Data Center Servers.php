@@ -8,6 +8,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+if ( ! class_exists( 'DC_Servers_Manager' ) ) {
 class DC_Servers_Manager {
 
     private static $instance = null;
@@ -1440,87 +1441,14 @@ class DC_Servers_Manager {
                 <input type="hidden" name="dc_servers_action" value="delete_permanent_all">
                 <button type="submit" class="dc-btn-danger">מחיקת כל סל המחזור לצמיתות</button>
             </form>
-
-            <div class="dc-import-export">
-                <h3>ייבוא / ייצוא</h3>
-                <div class="dc-import-export-row">
-                    <form method="post" enctype="multipart/form-data">
-                        <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                        <input type="hidden" name="dc_servers_action" value="import_servers">
-                        <input type="file" name="servers_file" accept=".csv, .xls, .xlsx" required>
-                        <button type="submit" class="dc-btn-primary">ייבוא CSV / Excel</button>
-                    </form>
-
-                    <?php $export_nonce = wp_create_nonce( 'dc_servers_export' ); ?>
-                    <a class="dc-btn-secondary" href="<?php echo esc_url( add_query_arg( array( 'dc_servers_export' => 'csv', '_wpnonce' => $export_nonce ) ) ); ?>">ייצוא CSV</a>
-                    <a class="dc-btn-secondary" href="<?php echo esc_url( add_query_arg( array( 'dc_servers_export' => 'excel', '_wpnonce' => $export_nonce ) ) ); ?>">ייצוא Excel</a>
-                </div>
-            </div>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
-
-    public function render_trash_shortcode( $atts ) {
-        $search  = isset( $_GET['dc_s_search'] ) ? sanitize_text_field( $_GET['dc_s_search'] ) : '';
-        $orderby = isset( $_GET['dc_s_orderby'] ) ? sanitize_key( $_GET['dc_s_orderby'] ) : 'server_name';
-        $order   = isset( $_GET['dc_s_order'] ) ? sanitize_key( $_GET['dc_s_order'] )   : 'ASC';
-
-        $deleted_servers = $this->get_servers( true, $search, $orderby, $order );
-
-        ob_start();
-        ?>
-        <div class="dc-servers-wrap">
-            <form method="get" class="dc-search-form">
-                <input type="text" name="dc_s_search" value="<?php echo esc_attr( $search ); ?>" placeholder="חיפוש לפי שרת / IP / לקוח">
-                <button type="submit">חיפוש</button>
-            </form>
-
-            <h3>סל מחזור</h3>
-            <table class="dc-table-modern dc-trash-table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>שם שרת</th>
-                        <th>IP פנימי</th>
-                        <th>IP WAN</th>
-                        <th>לקוח</th>
-                        <th>נמחק בתאריך</th>
-                        <th>מחיקה לצמיתות</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ( $deleted_servers as $s ) : ?>
-                        <?php if ( ! $s->is_deleted ) continue; ?>
-                        <tr>
-                            <td><?php echo esc_html( $s->id ); ?></td>
-                            <td><?php echo esc_html( $s->server_name ); ?></td>
-                            <td><?php echo esc_html( $s->ip_internal ); ?></td>
-                            <td><?php echo esc_html( $s->ip_wan ); ?></td>
-                            <td><?php echo esc_html( $s->customer_name . ' (' . $s->customer_number . ')' ); ?></td>
-                            <td><?php echo esc_html( $s->deleted_at ); ?></td>
-                            <td>
-                                <form method="post">
-                                    <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                                    <input type="hidden" name="dc_servers_action" value="delete_permanent">
-                                    <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                    <button type="submit" class="dc-btn-danger">מחיקה לצמיתות</button>
-                                </form>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-
-            <form method="post">
-                <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                <input type="hidden" name="dc_servers_action" value="delete_permanent_all">
-                <button type="submit" class="dc-btn-danger">מחיקת כל סל המחזור לצמיתות</button>
-            </form>
         </div>
         <?php
         return ob_get_clean();
     }
 }
 
-DC_Servers_Manager::instance();
+}
+
+if ( class_exists( 'DC_Servers_Manager' ) ) {
+    DC_Servers_Manager::instance();
+}
