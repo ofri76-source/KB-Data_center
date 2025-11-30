@@ -217,4 +217,23 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     });
+
+    const inventoryRows = Array.from(document.querySelectorAll('.dc-inventory-row'));
+    if (inventoryRows.length) {
+        inventoryRows.forEach((row) => {
+            row.addEventListener('click', () => {
+                const details = row.nextElementSibling;
+                if (!details || !details.classList.contains('dc-inventory-details')) return;
+
+                const currentlyOpen = row.classList.contains('open');
+                document.querySelectorAll('.dc-inventory-row.open').forEach((r) => r.classList.remove('open'));
+                document.querySelectorAll('.dc-inventory-details.open').forEach((d) => d.classList.remove('open'));
+
+                if (!currentlyOpen) {
+                    row.classList.add('open');
+                    details.classList.add('open');
+                }
+            });
+        });
+    }
 });

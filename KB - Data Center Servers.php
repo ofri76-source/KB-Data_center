@@ -108,6 +108,9 @@ class DC_Servers_Manager {
             object_type VARCHAR(100) NOT NULL DEFAULT '',
             host_name VARCHAR(255) NOT NULL,
             vm_name VARCHAR(255) NOT NULL,
+            vm_path VARCHAR(255) DEFAULT '',
+            status VARCHAR(100) DEFAULT '',
+            os_name VARCHAR(255) DEFAULT '',
             memory_mb BIGINT(20) NOT NULL DEFAULT 0,
             nic1_name VARCHAR(255) DEFAULT '',
             nic1_ip VARCHAR(45) DEFAULT '',
@@ -211,6 +214,9 @@ class DC_Servers_Manager {
                 object_type VARCHAR(100) NOT NULL DEFAULT '',
                 host_name VARCHAR(255) NOT NULL,
                 vm_name VARCHAR(255) NOT NULL,
+                vm_path VARCHAR(255) DEFAULT '',
+                status VARCHAR(100) DEFAULT '',
+                os_name VARCHAR(255) DEFAULT '',
                 memory_mb BIGINT(20) NOT NULL DEFAULT 0,
                 nic1_name VARCHAR(255) DEFAULT '',
                 nic1_ip VARCHAR(45) DEFAULT '',
@@ -238,6 +244,19 @@ class DC_Servers_Manager {
                 UNIQUE KEY host_vm_unique (host_name, vm_name)
             ) {$charset_collate};";
             dbDelta( $sql );
+        }
+
+        $inventory_new_columns = array(
+            'vm_path' => "ALTER TABLE {$inventory_table} ADD COLUMN vm_path VARCHAR(255) DEFAULT '' AFTER vm_name",
+            'status'  => "ALTER TABLE {$inventory_table} ADD COLUMN status VARCHAR(100) DEFAULT '' AFTER vm_path",
+            'os_name' => "ALTER TABLE {$inventory_table} ADD COLUMN os_name VARCHAR(255) DEFAULT '' AFTER status",
+        );
+
+        foreach ( $inventory_new_columns as $column => $statement ) {
+            $has_column = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM {$inventory_table} LIKE %s", $column ) );
+            if ( empty( $has_column ) ) {
+                $wpdb->query( $statement );
+            }
         }
     }
 
@@ -833,6 +852,8 @@ class DC_Servers_Manager {
         $safe_host = sanitize_file_name( $host_name );
         $upload_dir = wp_upload_dir();
         $paths = array(
+            trailingslashit( $upload_dir['basedir'] ) . 'servers/' . $safe_host . '_VMS.csv',
+            'c:\\xampp\\htdocs\\wp-content\\uploads\\servers\\' . $safe_host . '_VMS.csv',
             trailingslashit( $upload_dir['basedir'] ) . 'servers/' . $safe_host . '.csv',
             'c:\\xampp\\htdocs\\wp-content\\uploads\\servers\\' . $safe_host . '.csv',
         );
@@ -844,6 +865,8 @@ class DC_Servers_Manager {
         }
 
         $urls = array(
+            trailingslashit( $upload_dir['baseurl'] ) . 'servers/' . rawurlencode( $safe_host ) . '_VMS.csv',
+            'https://kb.macomp.co.il/wp-content/uploads/servers/' . rawurlencode( $safe_host ) . '_VMS.csv',
             trailingslashit( $upload_dir['baseurl'] ) . 'servers/' . rawurlencode( $safe_host ) . '.csv',
             'https://kb.macomp.co.il/wp-content/uploads/servers/' . rawurlencode( $safe_host ) . '.csv',
         );
@@ -888,10 +911,15 @@ class DC_Servers_Manager {
             $mapped[ $key ] = isset( $values[ $index ] ) ? $values[ $index ] : '';
         }
 
+        $status_val = isset( $mapped['status'] ) ? $mapped['status'] : ( isset( $mapped['stats'] ) ? $mapped['stats'] : '' );
+
         return array(
             'object_type' => isset( $mapped['objecttype'] ) ? sanitize_text_field( $mapped['objecttype'] ) : '',
             'host_name'   => isset( $mapped['hostname'] ) ? sanitize_text_field( $mapped['hostname'] ) : '',
             'vm_name'     => isset( $mapped['vmname'] ) ? sanitize_text_field( $mapped['vmname'] ) : '',
+            'vm_path'     => isset( $mapped['host_server_name_vm_path'] ) ? sanitize_text_field( $mapped['host_server_name_vm_path'] ) : '',
+            'status'      => sanitize_text_field( $status_val ),
+            'os_name'     => isset( $mapped['os'] ) ? sanitize_text_field( $mapped['os'] ) : '',
             'memory_mb'   => isset( $mapped['memorymb'] ) ? intval( $mapped['memorymb'] ) : 0,
             'nic1_name'   => isset( $mapped['nic1_name'] ) ? sanitize_text_field( $mapped['nic1_name'] ) : '',
             'nic1_ip'     => isset( $mapped['nic1_ip'] ) ? sanitize_text_field( $mapped['nic1_ip'] ) : '',
@@ -923,6 +951,9 @@ class DC_Servers_Manager {
             'object_type' => '',
             'host_name'   => '',
             'vm_name'     => '',
+            'vm_path'     => '',
+            'status'      => '',
+            'os_name'     => '',
             'memory_mb'   => 0,
             'nic1_name'   => '',
             'nic1_ip'     => '',
@@ -954,9 +985,9 @@ class DC_Servers_Manager {
             $this->inventory_table,
             $data,
             array(
-                '%s','%s','%s','%d','%s','%s','%s','%s','%s','%s',
+                '%s','%s','%s','%s','%s','%s','%d','%s','%s','%s',
                 '%s','%s','%s','%s','%s','%s','%s','%s','%s','%s',
-                '%s','%s','%s','%s','%s','%s'
+                '%s','%s','%s','%s','%s','%s','%s','%s','%s'
             )
         );
     }
@@ -1392,7 +1423,7 @@ class DC_Servers_Manager {
 
                 <div class="dc-settings-card" style="grid-column:1 / -1;">
                     <h2>ייבוא אוטומטי מ-CSV</h2>
-                    <p>הקבצים נמשכים מתוך wp-content/uploads/servers/&lt;HostName&gt;.csv (או מהנתיב המקומי). בחר "ייבוא כעת" כדי לטעון ידנית.</p>
+                    <p>הקבצים נמשכים מתוך wp-content/uploads/servers/&lt;HostName&gt;_VMS.csv (או מהנתיב המקומי). בחר "ייבוא כעת" כדי לטעון ידנית.</p>
                     <p>הריצה האחרונה: <?php echo esc_html( get_option( 'dc_inventory_last_run', 'לא ידוע' ) ); ?></p>
                     <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-bottom:12px;">
                         <?php wp_nonce_field( 'dc_inventory_import' ); ?>
@@ -1400,38 +1431,66 @@ class DC_Servers_Manager {
                         <button class="button button-primary" type="submit">ייבוא כעת</button>
                     </form>
 
-                    <div style="max-height:400px; overflow:auto;">
-                        <table class="widefat striped">
+                    <div class="dc-inventory-table-wrap">
+                        <table class="widefat striped dc-inventory-table">
                             <thead>
                                 <tr>
-                                    <th>Host</th>
-                                    <th>VM</th>
-                                    <th>Memory (MB)</th>
-                                    <th>NIC1 IP</th>
+                                    <th>Host / Path</th>
+                                    <th>VM Name</th>
                                     <th>NIC2 IP</th>
-                                    <th>NIC3 IP</th>
-                                    <th>Disk1 Size</th>
-                                    <th>Disk2 Size</th>
-                                    <th>עודכן</th>
+                                    <th>סטטוס</th>
+                                    <th>NIC2 Name</th>
+                                    <th>NIC1 IP</th>
+                                    <th>Memory (MB)</th>
+                                    <th>OS</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php if ( ! empty( $inventory ) ) : ?>
                                     <?php foreach ( $inventory as $row ) : ?>
-                                        <tr>
-                                            <td><?php echo esc_html( $row->host_name ); ?></td>
+                                        <?php
+                                        $main_label = ! empty( $row->vm_path ) ? $row->vm_path : $row->host_name;
+                                        $disks = array();
+                                        for ( $i = 1; $i <= 5; $i++ ) {
+                                            $num   = isset( $row->{ 'physicaldisk' . $i . '_number' } ) ? $row->{ 'physicaldisk' . $i . '_number' } : '';
+                                            $model = isset( $row->{ 'physicaldisk' . $i . '_model' } ) ? $row->{ 'physicaldisk' . $i . '_model' } : '';
+                                            $size  = isset( $row->{ 'physicaldisk' . $i . '_sizegb' } ) ? $row->{ 'physicaldisk' . $i . '_sizegb' } : '';
+                                            if ( $num || $model || $size ) {
+                                                $label = trim( implode( ' ', array_filter( array( '#' . ( $num ? $num : $i ), $model, $size ) ) ) );
+                                                $disks[] = $label;
+                                            }
+                                        }
+                                        ?>
+                                        <tr class="dc-inventory-row">
+                                            <td><?php echo esc_html( $main_label ); ?></td>
                                             <td><?php echo esc_html( $row->vm_name ); ?></td>
-                                            <td><?php echo esc_html( $row->memory_mb ); ?></td>
-                                            <td><?php echo esc_html( $row->nic1_ip ); ?></td>
                                             <td><?php echo esc_html( $row->nic2_ip ); ?></td>
-                                            <td><?php echo esc_html( $row->nic3_ip ); ?></td>
-                                            <td><?php echo esc_html( $row->physicaldisk1_sizegb ); ?></td>
-                                            <td><?php echo esc_html( $row->physicaldisk2_sizegb ); ?></td>
-                                            <td><?php echo esc_html( $row->imported_at ); ?></td>
+                                            <td><?php echo esc_html( $row->status ); ?></td>
+                                            <td><?php echo esc_html( $row->nic2_name ); ?></td>
+                                            <td><?php echo esc_html( $row->nic1_ip ); ?></td>
+                                            <td><?php echo esc_html( $row->memory_mb ); ?></td>
+                                            <td><?php echo esc_html( $row->os_name ); ?></td>
+                                        </tr>
+                                        <tr class="dc-inventory-details">
+                                            <td colspan="8">
+                                                <div class="dc-inventory-detail-grid">
+                                                    <div><strong>Host:</strong> <?php echo esc_html( $row->host_name ); ?></div>
+                                                    <div><strong>VM Path:</strong> <?php echo esc_html( $row->vm_path ); ?></div>
+                                                    <div><strong>Object Type:</strong> <?php echo esc_html( $row->object_type ); ?></div>
+                                                    <div><strong>סטטוס:</strong> <?php echo esc_html( $row->status ); ?></div>
+                                                    <div><strong>NIC1:</strong> <?php echo esc_html( trim( $row->nic1_name . ' ' . $row->nic1_ip ) ); ?></div>
+                                                    <div><strong>NIC2:</strong> <?php echo esc_html( trim( $row->nic2_name . ' ' . $row->nic2_ip ) ); ?></div>
+                                                    <div><strong>NIC3:</strong> <?php echo esc_html( trim( $row->nic3_name . ' ' . $row->nic3_ip ) ); ?></div>
+                                                    <div><strong>עודכן:</strong> <?php echo esc_html( $row->imported_at ); ?></div>
+                                                </div>
+                                                <?php if ( ! empty( $disks ) ) : ?>
+                                                    <div class="dc-inventory-disks"><strong>דיסקים:</strong> <?php echo esc_html( implode( ', ', $disks ) ); ?></div>
+                                                <?php endif; ?>
+                                            </td>
                                         </tr>
                                     <?php endforeach; ?>
                                 <?php else : ?>
-                                    <tr><td colspan="9">לא קיימים נתונים מיובאים.</td></tr>
+                                    <tr><td colspan="8">לא קיימים נתונים מיובאים.</td></tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>

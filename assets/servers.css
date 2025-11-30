@@ -222,6 +222,39 @@
     background: #fff;
 }
 
+.dc-inventory-table-wrap {
+    max-height: 440px;
+    overflow: auto;
+}
+
+.dc-inventory-table .dc-inventory-row {
+    cursor: pointer;
+}
+
+.dc-inventory-table .dc-inventory-row:hover td {
+    background: #f8fbff;
+}
+
+.dc-inventory-details {
+    display: none;
+    background: #f5f7fa;
+}
+
+.dc-inventory-details.open {
+    display: table-row;
+}
+
+.dc-inventory-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px 16px;
+    margin-bottom: 8px;
+}
+
+.dc-inventory-disks {
+    font-weight: 600;
+}
+
 @media (max-width: 640px) {
     .dc-search-form {
         flex-direction: column;
