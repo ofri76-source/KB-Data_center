@@ -24,6 +24,13 @@
     margin-bottom: 16px;
 }
 
+.dc-nav-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 8px 0 16px;
+}
+
 .dc-search-form input[type="text"] {
     flex: 1;
     border-radius: 999px;

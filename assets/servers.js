@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const ipPool = wrap.querySelector('.dc-ip-pool');
         const ipInternalInput = wrap.querySelector('input[name="ip_internal"]');
         const ipWanInput = wrap.querySelector('input[name="ip_wan"]');
+        const hostSelect = wrap.querySelector('select[name="location"]');
         const fillInternalBtn = wrap.querySelector('.dc-fill-next-internal');
         const fillWanBtn = wrap.querySelector('.dc-fill-next-wan');
         const customerOptions = Array.from(wrap.querySelectorAll('.dc-customer-option')).map((opt) => ({
@@ -20,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
         const availableInternal = ipPool?.dataset?.availableInternal ? JSON.parse(ipPool.dataset.availableInternal) : [];
         const availableWan = ipPool?.dataset?.availableWan ? JSON.parse(ipPool.dataset.availableWan) : [];
+        const nextInternalMap = ipPool?.dataset?.nextInternalMap ? JSON.parse(ipPool.dataset.nextInternalMap) : {};
         const nextInternal = ipPool?.dataset?.nextInternal || '';
         const nextWan = ipPool?.dataset?.nextWan || '';
         const ensureOptionExists = (select, value) => {
@@ -54,6 +56,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (customerIdField) {
                 customerIdField.value = '';
             }
+            if (hostSelect) {
+                hostSelect.value = '';
+            }
             if (ipInternalInput && nextInternal) {
                 ipInternalInput.value = nextInternal;
             }
@@ -61,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ipWanInput.value = nextWan;
             }
             setFormState('expanded');
+            applyHostFilter();
         };
 
         if (toggleBtn) {
@@ -90,6 +96,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     ensureOptionExists(farmField, btn.dataset.farm || '');
                     farmField.value = btn.dataset.farm || '';
                 }
+                if (hostSelect) {
+                    ensureOptionExists(hostSelect, btn.dataset.location || '');
+                    hostSelect.value = btn.dataset.location || '';
+                    applyHostFilter();
+                }
                 if (customerNameInput) {
                     customerNameInput.value = btn.dataset.customer_name || '';
                 }
@@ -111,11 +122,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const pickNextAvailable = (type) => {
+            const hostValue = hostSelect ? hostSelect.value : '';
+            const normalizedHost = hostValue ? hostValue.toLowerCase() : '';
             if (type === 'internal') {
-                if (ipInternalInput && nextInternal) {
-                    ipInternalInput.value = nextInternal;
-                } else if (ipInternalInput && availableInternal.length) {
-                    ipInternalInput.value = availableInternal[0];
+                const hostSpecific = normalizedHost && nextInternalMap[hostValue] ? nextInternalMap[hostValue] : '';
+                const fallbackInternal = availableInternal.find((row) => {
+                    const rowHost = (row.host || '').toLowerCase();
+                    return normalizedHost ? rowHost === normalizedHost : true;
+                });
+                if (ipInternalInput) {
+                    ipInternalInput.value = hostSpecific || nextInternal || fallbackInternal?.address || ipInternalInput.value;
                 }
             } else if (type === 'wan') {
                 if (ipWanInput && nextWan) {
@@ -123,6 +139,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (ipWanInput && availableWan.length) {
                     ipWanInput.value = availableWan[0];
                 }
+            }
+        };
+
+        const applyHostFilter = () => {
+            const hostValue = hostSelect ? hostSelect.value : '';
+            const normalizedHost = hostValue ? hostValue.toLowerCase() : '';
+            wrap.querySelectorAll('#dc-ip-internal-list option').forEach((opt) => {
+                const optHost = (opt.dataset.host || '').toLowerCase();
+                const match = !normalizedHost || !optHost || optHost === normalizedHost;
+                opt.disabled = !match;
+                opt.hidden = !match && normalizedHost;
+            });
+
+            if (ipInternalInput && !ipInternalInput.value) {
+                pickNextAvailable('internal');
             }
         };
 
@@ -170,6 +201,11 @@ document.addEventListener('DOMContentLoaded', () => {
             customerNumberInput.addEventListener('input', () => {
                 setCustomerByMatch('number', customerNumberInput.value.trim());
             });
+        }
+
+        if (hostSelect) {
+            hostSelect.addEventListener('change', applyHostFilter);
+            applyHostFilter();
         }
 
         if (form) {
