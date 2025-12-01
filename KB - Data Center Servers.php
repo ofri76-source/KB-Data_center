@@ -362,12 +362,22 @@ class DC_Servers_Manager {
             'physicaldisk5_model'  => "ALTER TABLE {$host_inventory_table} ADD COLUMN physicaldisk5_model VARCHAR(255) DEFAULT '' AFTER physicaldisk5_number",
             'physicaldisk5_sizegb' => "ALTER TABLE {$host_inventory_table} ADD COLUMN physicaldisk5_sizegb VARCHAR(50) DEFAULT '' AFTER physicaldisk5_model",
             'imported_at' => "ALTER TABLE {$host_inventory_table} ADD COLUMN imported_at DATETIME NOT NULL AFTER physicaldisk5_sizegb",
-            'host_unique' => "ALTER TABLE {$host_inventory_table} ADD UNIQUE KEY host_unique (host_name)",
         );
 
         foreach ( $host_inventory_columns as $column => $statement ) {
             $has_column = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM {$host_inventory_table} LIKE %s", $column ) );
             if ( empty( $has_column ) ) {
+                $wpdb->query( $statement );
+            }
+        }
+
+        $host_inventory_indexes = array(
+            'host_unique' => "ALTER TABLE {$host_inventory_table} ADD UNIQUE KEY host_unique (host_name)",
+        );
+
+        foreach ( $host_inventory_indexes as $index => $statement ) {
+            $has_index = $wpdb->get_var( $wpdb->prepare( "SHOW INDEX FROM {$host_inventory_table} WHERE Key_name = %s", $index ) );
+            if ( empty( $has_index ) ) {
                 $wpdb->query( $statement );
             }
         }
