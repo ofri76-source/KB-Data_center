@@ -237,3 +237,71 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+
+// פתיחה/סגירה של שורות מורחבות
+document.querySelectorAll('.dc-server-row').forEach((row) => {
+    row.addEventListener('click', (e) => {
+        // מנע פתיחה אם לחצו על כפתור בתוך השורה
+        if (e.target.closest('button') || e.target.closest('form')) {
+            return;
+        }
+        
+        const serverId = row.dataset.serverId;
+        const detailsRow = document.querySelector(`.dc-server-details[data-server-id="${serverId}"]`);
+        
+        if (!detailsRow) return;
+        
+        // סגור את כל השורות האחרות
+        document.querySelectorAll('.dc-server-row.active').forEach((r) => {
+            if (r !== row) {
+                r.classList.remove('active');
+            }
+        });
+        document.querySelectorAll('.dc-server-details.open').forEach((d) => {
+            if (d !== detailsRow) {
+                d.classList.remove('open');
+            }
+        });
+        
+        // Toggle השורה הנוכחית
+        row.classList.toggle('active');
+        detailsRow.classList.toggle('open');
+    });
+});
+
+// כפתור שכפול
+document.querySelectorAll('.dc-duplicate-server').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const sourceRow = btn.closest('.dc-server-details').previousElementSibling;
+        const form = document.querySelector('.dc-form-modern');
+        
+        if (!form || !sourceRow) return;
+        
+        // מילוי הטופס מהשורה המקורית
+        const editBtn = btn.parentElement.querySelector('.dc-edit-server');
+        if (editBtn) {
+            // העתק את כל הנתונים פרט ל-ID
+            form.querySelector('input[name="server_name"]').value = editBtn.dataset.server_name + ' (עותק)';
+            form.querySelector('input[name="ip_internal"]').value = ''; // יצטרך למלא חדש
+            form.querySelector('input[name="ip_wan"]').value = '';
+            form.querySelector('select[name="location"]').value = editBtn.dataset.location || '';
+            form.querySelector('select[name="farm"]').value = editBtn.dataset.farm || '';
+            
+            const customerNameInput = form.querySelector('input[name="customer_name_search"]');
+            const customerNumberInput = form.querySelector('input[name="customer_number_search"]');
+            const customerIdField = form.querySelector('input[name="customer_id"]');
+            
+            if (customerNameInput) customerNameInput.value = editBtn.dataset.customer_name || '';
+            if (customerNumberInput) customerNumberInput.value = editBtn.dataset.customer_number || '';
+            if (customerIdField) customerIdField.value = editBtn.dataset.customer_id || '';
+            
+            // נקה את ID כדי שזה יהיה הוספה חדשה
+            form.querySelector('input[name="id"]').value = '';
+            form.querySelector('.dc-form-title').textContent = 'שכפול שרת';
+        }
+        
+        // פתח את הטופס וגלול אליו
+        form.classList.remove('dc-form-collapsed');
+        form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+});

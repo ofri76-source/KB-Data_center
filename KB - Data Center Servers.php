@@ -2274,92 +2274,136 @@ class DC_Servers_Manager {
             </form>
 
             <h3>רשימת שרתים</h3>
-            <form method="post">
-                <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                <input type="hidden" name="dc_servers_action" value="soft_delete_bulk">
-
-                <table class="dc-table-modern">
+            <div class="dc-table-wrapper">
+                <table class="dc-table-modern dc-table-expandable">
                     <thead>
                         <tr>
-                            <th><input type="checkbox" class="dc-select-all"></th>
-                            <th><a href="?dc_s_orderby=id&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">ID</a></th>
-                            <th><a href="?dc_s_orderby=server_name&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">שם שרת</a></th>
-                            <th><a href="?dc_s_orderby=ip_internal&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">IP פנימי</a></th>
-                            <th><a href="?dc_s_orderby=ip_wan&dc_s_order=<?php echo $order === 'ASC' ? 'DESC' : 'ASC'; ?>">IP WAN</a></th>
-                            <th>סטטוס</th>
-                            <th>ליבות CPU</th>
-                            <th>זיכרון (MB)</th>
-                            <th>NIC1 IP</th>
-                            <th>Disk1 (GB)</th>
                             <th>לקוח</th>
-                            <th>Hyper-v Host</th>
-                            <th>חווה</th>
-                            <th>פעולות</th>
+                            <th>שם שרת</th>
+                            <th>IP פנימי</th>
+                            <th>IP WAN</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if ( $servers ) : ?>
                             <?php foreach ( $servers as $s ) : ?>
-                                <?php $inventory_row = $this->find_inventory_for_server( $inventory_index, $s ); ?>
-                                <tr>
-                                    <td><input type="checkbox" name="ids[]" value="<?php echo esc_attr( $s->id ); ?>"></td>
-                                    <td><?php echo esc_html( $s->id ); ?></td>
+                                <?php
+                                $inventory_row = $this->find_inventory_for_server( $inventory_index, $s );
+                                $status        = $inventory_row && ! empty( $inventory_row->status ) ? $inventory_row->status : ( isset( $s->status ) ? $s->status : '' );
+                                $cpu_cores     = $inventory_row && isset( $inventory_row->cpu_cores ) ? $inventory_row->cpu_cores : ( isset( $s->cpu_cores ) ? $s->cpu_cores : '' );
+                                $memory_mb     = $inventory_row && isset( $inventory_row->memory_mb ) ? $inventory_row->memory_mb : ( isset( $s->memory_mb ) ? $s->memory_mb : '' );
+                                $nic1_ip       = $inventory_row && ! empty( $inventory_row->nic1_ip ) ? $inventory_row->nic1_ip : ( isset( $s->nic1_ip ) ? $s->nic1_ip : '' );
+                                $nic2_ip       = $inventory_row && ! empty( $inventory_row->nic2_ip ) ? $inventory_row->nic2_ip : ( isset( $s->nic2_ip ) ? $s->nic2_ip : '' );
+                                $disk1_size    = $inventory_row && isset( $inventory_row->physicaldisk1_sizegb ) ? $inventory_row->physicaldisk1_sizegb : ( isset( $s->physicaldisk1_sizegb ) ? $s->physicaldisk1_sizegb : '' );
+                                $disk2_size    = $inventory_row && isset( $inventory_row->physicaldisk2_sizegb ) ? $inventory_row->physicaldisk2_sizegb : ( isset( $s->physicaldisk2_sizegb ) ? $s->physicaldisk2_sizegb : '' );
+                                ?>
+                                <tr class="dc-server-row" data-server-id="<?php echo esc_attr( $s->id ); ?>">
+                                    <td>
+                                        <?php if ( ! empty( $s->customer_name ) ) : ?>
+                                            <?php echo esc_html( $s->customer_name ) . ' (' . esc_html( $s->customer_number ) . ')'; ?>
+                                        <?php else : ?>
+                                            <span class="dc-no-customer">לא משויך</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td><?php echo esc_html( $s->server_name ); ?></td>
                                     <td><?php echo esc_html( $s->ip_internal ); ?></td>
-                                    <td><?php echo esc_html( $s->ip_wan ); ?></td>
-                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->status : '' ); ?></td>
-                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->cpu_cores : '' ); ?></td>
-                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->memory_mb : '' ); ?></td>
-                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->nic1_ip : '' ); ?></td>
-                                    <td><?php echo esc_html( $inventory_row ? $inventory_row->physicaldisk1_sizegb : '' ); ?></td>
-                                    <td><?php echo esc_html( $s->customer_name . ' (' . $s->customer_number . ')' ); ?></td>
-                                    <td><?php echo esc_html( $s->location ); ?></td>
-                                    <td><?php echo esc_html( $s->farm ); ?></td>
-                                    <td class="dc-actions">
-                                        <button type="button"
-                                                class="dc-btn-secondary dc-btn-icon dc-edit-server"
-                                                title="עריכה"
-                                                aria-label="עריכה"
-                                                data-id="<?php echo esc_attr( $s->id ); ?>"
-                                                data-customer_id="<?php echo esc_attr( $s->customer_id ); ?>"
-                                                data-customer_name="<?php echo esc_attr( $s->customer_name ); ?>"
-                                                data-customer_number="<?php echo esc_attr( $s->customer_number ); ?>"
-                                                data-server_name="<?php echo esc_attr( $s->server_name ); ?>"
-                                                data-ip_internal="<?php echo esc_attr( $s->ip_internal ); ?>"
-                                                data-ip_wan="<?php echo esc_attr( $s->ip_wan ); ?>"
-                                                data-location="<?php echo esc_attr( $s->location ); ?>"
-                                                data-farm="<?php echo esc_attr( $s->farm ); ?>">
-                                            <span class="dashicons dashicons-edit"></span>
-                                        </button>
+                                    <td><?php echo esc_html( $s->ip_wan ?: '—' ); ?></td>
+                                </tr>
+                                <tr class="dc-server-details" data-server-id="<?php echo esc_attr( $s->id ); ?>">
+                                    <td colspan="4">
+                                        <div class="dc-details-grid">
+                                            <div class="dc-detail-section">
+                                                <h4>מיקום ותשתית</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Hyper-V Host:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $s->location ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">חווה:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $s->farm ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">סטטוס:</span>
+                                                    <span class="dc-value dc-status-<?php echo sanitize_html_class( strtolower( $status ) ); ?>"><?php echo esc_html( $status ?: 'Unknown' ); ?></span>
+                                                </div>
+                                            </div>
 
-                                        <form method="post" style="display:inline;">
-                                            <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                                            <input type="hidden" name="dc_servers_action" value="duplicate">
-                                            <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                            <button type="submit" class="dc-btn-secondary dc-btn-icon" title="שיכפול" aria-label="שיכפול">
+                                            <div class="dc-detail-section">
+                                                <h4>משאבים</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">ליבות CPU:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $cpu_cores !== '' ? intval( $cpu_cores ) : '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">זיכרון:</span>
+                                                    <span class="dc-value"><?php echo $memory_mb !== '' ? esc_html( number_format( (int) $memory_mb ) . ' MB' ) : '—'; ?></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="dc-detail-section">
+                                                <h4>רשת</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">NIC1 IP:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $nic1_ip ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">NIC2 IP:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $nic2_ip ?: '—' ); ?></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="dc-detail-section">
+                                                <h4>אחסון</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Disk1:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $disk1_size !== '' ? $disk1_size : '—' ); ?><?php echo $disk1_size !== '' ? ' GB' : ''; ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Disk2:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $disk2_size !== '' ? $disk2_size : '—' ); ?><?php echo $disk2_size !== '' ? ' GB' : ''; ?></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="dc-details-actions">
+                                            <button class="dc-btn-secondary dc-btn-icon dc-edit-server"
+                                                    data-id="<?php echo esc_attr( $s->id ); ?>"
+                                                    data-server_name="<?php echo esc_attr( $s->server_name ); ?>"
+                                                    data-ip_internal="<?php echo esc_attr( $s->ip_internal ); ?>"
+                                                    data-ip_wan="<?php echo esc_attr( $s->ip_wan ); ?>"
+                                                    data-location="<?php echo esc_attr( $s->location ); ?>"
+                                                    data-farm="<?php echo esc_attr( $s->farm ); ?>"
+                                                    data-customer_id="<?php echo esc_attr( $s->customer_id ); ?>"
+                                                    data-customer_name="<?php echo esc_attr( $s->customer_name ); ?>"
+                                                    data-customer_number="<?php echo esc_attr( $s->customer_number ); ?>">
+                                                <span class="dashicons dashicons-edit"></span>
+                                                עריכה
+                                            </button>
+
+                                            <button class="dc-btn-secondary dc-btn-icon dc-duplicate-server" data-id="<?php echo esc_attr( $s->id ); ?>">
                                                 <span class="dashicons dashicons-admin-page"></span>
+                                                שכפול
                                             </button>
-                                        </form>
 
-                                        <form method="post" style="display:inline;">
-                                            <?php wp_nonce_field( 'dc_servers_action' ); ?>
-                                            <input type="hidden" name="dc_servers_action" value="soft_delete">
-                                            <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
-                                            <button type="submit" class="dc-btn-danger dc-btn-icon" title="מחיקה" aria-label="מחיקה">
-                                                <span class="dashicons dashicons-trash"></span>
-                                            </button>
-                                        </form>
+                                            <form method="post" style="display:inline;" onsubmit="return confirm('האם למחוק את השרת?');">
+                                                <?php wp_nonce_field( 'dc_servers_action' ); ?>
+                                                <input type="hidden" name="dc_servers_action" value="soft_delete">
+                                                <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
+                                                <button type="submit" class="dc-btn-danger dc-btn-icon">
+                                                    <span class="dashicons dashicons-trash"></span>
+                                                    מחיקה
+                                                </button>
+                                            </form>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else : ?>
-                            <tr><td colspan="14">לא נמצאו שרתים.</td></tr>
+                            <tr><td colspan="4">לא נמצאו שרתים.</td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
-
-                <button type="submit" class="dc-btn-danger">מחיקת רשומות מסומנות (לסל מחזור)</button>
-            </form>
+            </div>
 
             <div class="dc-import-export">
                 <h3>ייבוא / ייצוא</h3>
