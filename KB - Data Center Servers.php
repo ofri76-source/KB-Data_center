@@ -1030,39 +1030,27 @@ class DC_Servers_Manager {
         $imported = 0;
         $processed = 0;
 
-        $vm_hosts   = $this->discover_inventory_hosts();
-        $host_hosts = $this->discover_physical_hosts();
-        $all_hosts  = array_unique( array_merge( $vm_hosts, $host_hosts ) );
+        $vm_hosts = $this->discover_inventory_hosts();
 
-        if ( empty( $vm_hosts ) && empty( $host_hosts ) ) {
+        if ( empty( $vm_hosts ) ) {
             if ( $collect_messages ) {
-                $messages[] = 'לא נמצאו Hyper-v Hosts או קבצי CSV לטעינה.';
+                $messages[] = 'לא נמצאו קבצי _vms.csv לטעינה.';
             }
             return array( 'messages' => $messages, 'imported' => 0, 'processed' => 0 );
         }
 
-        foreach ( $all_hosts as $host_name ) {
+        foreach ( $vm_hosts as $host_name ) {
             $this->ensure_host_location_and_pool( $host_name );
         }
 
         foreach ( $vm_hosts as $host_name ) {
-            
+
             $result = $this->import_inventory_for_host( $host_name );
             $imported += $result['imported'];
             $processed += $result['processed'];
 
             if ( $collect_messages && ! empty( $result['message'] ) ) {
                 $messages[] = $result['message'];
-            }
-        }
-
-        foreach ( $host_hosts as $host_name ) {
-            $host_result = $this->import_physical_inventory_for_host( $host_name );
-            $imported += $host_result['imported'];
-            $processed += $host_result['processed'];
-
-            if ( $collect_messages && ! empty( $host_result['message'] ) ) {
-                $messages[] = $host_result['message'];
             }
         }
 
@@ -1892,8 +1880,6 @@ class DC_Servers_Manager {
         $farms     = $this->get_farms();
         $internal  = $this->get_internal_pool();
         $wans      = $this->get_wan_pool();
-        $inventory = $this->get_inventory_rows();
-        $host_inventory = $this->get_host_inventory_rows();
         $inventory_notice = get_transient( 'dc_inventory_notice' );
         delete_transient( 'dc_inventory_notice' );
 
@@ -2049,19 +2035,13 @@ class DC_Servers_Manager {
 
                 <div class="dc-settings-card" style="grid-column:1 / -1;">
                     <h2>ייבוא אוטומטי מ-CSV</h2>
-                    <p>הקבצים נמשכים רק מקבצי &lt;HostName&gt;_vms.csv (או _VMS.csv) מתוך wp-content/uploads/servers/. קבצי _host.csv מוצגים בטבלת השרתים הפיזיים שלמטה.</p>
+                    <p>הקבצים נמשכים רק מקבצי &lt;HostName&gt;_vms.csv (או _VMS.csv) מתוך wp-content/uploads/servers/. הנתונים נטענים ישר לטבלת השרתים הראשית.</p>
                     <p>הריצה האחרונה: <?php echo esc_html( get_option( 'dc_inventory_last_run', 'לא ידוע' ) ); ?></p>
                     <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-bottom:12px;">
                         <?php wp_nonce_field( 'dc_inventory_import' ); ?>
                         <input type="hidden" name="action" value="dc_import_inventory">
                         <button class="button button-primary" type="submit">ייבוא כעת</button>
                     </form>
-
-                    <h3>שרתים פיזיים (HOST)</h3>
-                    <?php echo $this->render_host_inventory_table_html( $host_inventory ); ?>
-
-                    <h3 style="margin-top:16px;">VMs</h3>
-                    <?php echo $this->render_inventory_table_html( $inventory ); ?>
                 </div>
             </div>
         </div>
@@ -2169,8 +2149,6 @@ class DC_Servers_Manager {
         $next_wan          = $this->get_first_free_address( 'wan' );
         $free_internal_map = $this->get_internal_free_map();
         $inventory_index   = $this->get_inventory_index();
-        $inventory_rows    = $this->get_inventory_rows();
-        $host_inventory_rows = $this->get_host_inventory_rows();
         $errors = get_transient( 'dc_servers_errors' );
         delete_transient( 'dc_servers_errors' );
 
@@ -2189,14 +2167,6 @@ class DC_Servers_Manager {
                 <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14278">הגדרות</a>
                 <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14276">סל מחזור</a>
                 <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14270">רשימת שרתים</a>
-            </div>
-
-            <div class="dc-inventory-inline">
-                <h3>שרתים פיזיים (HOST)</h3>
-                <?php echo $this->render_host_inventory_table_html( $host_inventory_rows ); ?>
-
-                <h3 style="margin-top:16px;">VMs</h3>
-                <?php echo $this->render_inventory_table_html( $inventory_rows ); ?>
             </div>
 
             <form method="get" class="dc-search-form">
