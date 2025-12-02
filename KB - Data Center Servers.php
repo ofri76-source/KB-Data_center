@@ -599,7 +599,7 @@ class DC_Servers_Manager {
         return $hosts;
     }
 
-    private function validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $id = null, &$errors = array() ) {
+    private function validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $location = '', $id = null, &$errors = array() ) {
         $server_name = trim( $server_name );
         $ip_internal = trim( $ip_internal );
         $ip_wan      = trim( $ip_wan );
@@ -719,7 +719,7 @@ class DC_Servers_Manager {
         }
 
         $errors = array();
-        if ( ! $this->validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $id, $errors ) ) {
+        if ( ! $this->validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $location, $id, $errors ) ) {
             set_transient( 'dc_servers_errors', $errors, 30 );
             return;
         }
@@ -891,7 +891,7 @@ class DC_Servers_Manager {
             $farm        = isset( $row['farm'] ) ? sanitize_text_field( $row['farm'] ) : '';
 
             $row_errors = array();
-            if ( ! $this->validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, null, $row_errors ) ) {
+            if ( ! $this->validate_server( $customer_id, $server_name, $ip_internal, $ip_wan, $location, null, $row_errors ) ) {
                 $errors = array_merge( $errors, $row_errors );
                 continue;
             }
