@@ -381,6 +381,24 @@ class DC_Servers_Manager {
                 $wpdb->query( $statement );
             }
         }
+
+        // Add new columns to the main servers table to store inventory metadata
+        $servers_new_columns = array(
+            'status'        => "ALTER TABLE {$this->table_name} ADD COLUMN status VARCHAR(100) DEFAULT '' AFTER farm",
+            'cpu_cores'     => "ALTER TABLE {$this->table_name} ADD COLUMN cpu_cores BIGINT(20) NOT NULL DEFAULT 0 AFTER status",
+            'memory_mb'     => "ALTER TABLE {$this->table_name} ADD COLUMN memory_mb BIGINT(20) NOT NULL DEFAULT 0 AFTER cpu_cores",
+            'nic1_ip'       => "ALTER TABLE {$this->table_name} ADD COLUMN nic1_ip VARCHAR(45) DEFAULT '' AFTER memory_mb",
+            'nic2_ip'       => "ALTER TABLE {$this->table_name} ADD COLUMN nic2_ip VARCHAR(45) DEFAULT '' AFTER nic1_ip",
+            'disk1_sizegb'  => "ALTER TABLE {$this->table_name} ADD COLUMN disk1_sizegb VARCHAR(50) DEFAULT '' AFTER nic2_ip",
+            'disk2_sizegb'  => "ALTER TABLE {$this->table_name} ADD COLUMN disk2_sizegb VARCHAR(50) DEFAULT '' AFTER disk1_sizegb",
+        );
+
+        foreach ( $servers_new_columns as $column => $statement ) {
+            $has_column = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM {$this->table_name} LIKE %s", $column ) );
+            if ( empty( $has_column ) ) {
+                $wpdb->query( $statement );
+            }
+        }
     }
 
     public function enqueue_assets() {
@@ -1009,14 +1027,147 @@ class DC_Servers_Manager {
         return 0;
     }
 
+    private function sync_server_from_inventory_row( $row ) {
+        global $wpdb;
+
+        $ip_internal = '';
+        $candidates  = array( $row['nic1_ip'], $row['nic2_ip'], $row['nic3_ip'] );
+        foreach ( $candidates as $ip ) {
+            if ( ! empty( $ip ) && $this->is_valid_internal_ip( $ip ) ) {
+                $ip_internal = $ip;
+                break;
+            }
+        }
+
+        if ( empty( $ip_internal ) ) {
+            return 'skipped_invalid_ip';
+        }
+
+        $server_data = array(
+            'server_name'   => sanitize_text_field( $row['vm_name'] ),
+            'ip_internal'   => $ip_internal,
+            'location'      => sanitize_text_field( $row['host_name'] ),
+            'status'        => sanitize_text_field( $row['status'] ),
+            'cpu_cores'     => intval( $row['cpu_cores'] ),
+            'memory_mb'     => intval( $row['memory_mb'] ),
+            'nic1_ip'       => sanitize_text_field( $row['nic1_ip'] ),
+            'nic2_ip'       => sanitize_text_field( $row['nic2_ip'] ),
+            'disk1_sizegb'  => sanitize_text_field( $row['physicaldisk1_sizegb'] ),
+            'disk2_sizegb'  => sanitize_text_field( $row['physicaldisk2_sizegb'] ),
+            'updated_at'    => current_time( 'mysql' ),
+        );
+
+        $existing = $wpdb->get_row(
+            $wpdb->prepare( "SELECT * FROM {$this->table_name} WHERE ip_internal = %s AND is_deleted = 0", $ip_internal )
+        );
+
+        if ( $existing ) {
+            $needs_update = (
+                $existing->server_name !== $server_data['server_name'] ||
+                $existing->location !== $server_data['location'] ||
+                $existing->status !== $server_data['status'] ||
+                $existing->cpu_cores != $server_data['cpu_cores'] ||
+                $existing->memory_mb != $server_data['memory_mb']
+            );
+
+            if ( $needs_update ) {
+                $update_data = $server_data;
+
+                if ( ! empty( $existing->ip_wan ) ) {
+                    unset( $update_data['ip_wan'] );
+                }
+
+                if ( ! empty( $existing->customer_id ) && $existing->customer_id > 0 ) {
+                    unset( $update_data['customer_id'] );
+                }
+
+                if ( ! empty( $existing->farm ) && $existing->farm !== 'יפו היתד' ) {
+                    unset( $update_data['farm'] );
+                }
+
+                $wpdb->update( $this->table_name, $update_data, array( 'id' => $existing->id ) );
+
+                return 'updated';
+            }
+
+            return 'unchanged';
+        }
+
+        $server_data['ip_wan']      = '';
+        $server_data['farm']        = 'יפו היתד';
+        $server_data['customer_id'] = 0;
+        $server_data['is_deleted']  = 0;
+        $server_data['created_at']  = current_time( 'mysql' );
+
+        $wpdb->insert( $this->table_name, $server_data );
+
+        return 'inserted';
+    }
+
     public function maybe_schedule_inventory_import() {
         if ( ! wp_next_scheduled( 'dc_servers_import_inventory' ) ) {
-            wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', 'dc_servers_import_inventory' );
+            wp_schedule_event( time(), 'hourly', 'dc_servers_import_inventory' );
         }
     }
 
     public function run_scheduled_inventory_import() {
-        $this->import_inventory_from_sources();
+        $current_minute = intval( date( 'i' ) );
+        if ( $current_minute < 5 ) {
+            sleep( ( 5 - $current_minute ) * 60 );
+        }
+
+        $hosts = $this->discover_inventory_hosts();
+
+        $stats = array(
+            'files_processed'   => 0,
+            'servers_inserted'  => 0,
+            'servers_updated'   => 0,
+            'servers_unchanged' => 0,
+            'servers_skipped'   => 0,
+        );
+
+        foreach ( $hosts as $host_name ) {
+            $result = $this->import_inventory_for_host( $host_name );
+
+            if ( $result['imported'] > 0 ) {
+                $stats['files_processed']++;
+
+                global $wpdb;
+                $inventory_rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT * FROM {$this->inventory_table} WHERE host_name = %s ORDER BY imported_at DESC",
+                        $host_name
+                    ),
+                    ARRAY_A
+                );
+
+                foreach ( $inventory_rows as $inv_row ) {
+                    $sync_result = $this->sync_server_from_inventory_row( $inv_row );
+
+                    switch ( $sync_result ) {
+                        case 'inserted':
+                            $stats['servers_inserted']++;
+                            break;
+                        case 'updated':
+                            $stats['servers_updated']++;
+                            break;
+                        case 'unchanged':
+                            $stats['servers_unchanged']++;
+                            break;
+                        default:
+                            $stats['servers_skipped']++;
+                    }
+                }
+            }
+        }
+
+        update_option(
+            'dc_servers_last_import',
+            array(
+                'time'  => current_time( 'mysql' ),
+                'stats' => $stats,
+            )
+        );
     }
 
     public function handle_manual_inventory_import() {
@@ -2036,6 +2187,365 @@ class DC_Servers_Manager {
                                             <input type="hidden" name="id" value="<?php echo esc_attr( $addr->id ); ?>">
                                             <button class="button button-link-delete" type="submit">מחיקה</button>
                                         </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="dc-settings-card" style="grid-column:1 / -1;">
+                    <h2>ייבוא אוטומטי מ-CSV</h2>
+                    <p>הקבצים נמשכים רק מקבצי &lt;HostName&gt;_vms.csv (או _VMS.csv) מתוך wp-content/uploads/servers/. הנתונים נטענים ישר לטבלת השרתים הראשית.</p>
+                    <p>הריצה האחרונה: <?php echo esc_html( get_option( 'dc_inventory_last_run', 'לא ידוע' ) ); ?></p>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-bottom:12px;">
+                        <?php wp_nonce_field( 'dc_inventory_import' ); ?>
+                        <input type="hidden" name="action" value="dc_import_inventory">
+                        <button class="button button-primary" type="submit">ייבוא כעת</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    public function handle_save_lookup() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        if ( empty( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'dc_lookup_action' ) ) {
+            wp_die( 'Nonce error' );
+        }
+
+        $type = isset( $_POST['lookup_type'] ) ? sanitize_key( $_POST['lookup_type'] ) : '';
+        $name = isset( $_POST['name'] ) ? sanitize_text_field( $_POST['name'] ) : '';
+        if ( ! in_array( $type, array( 'location', 'farm', 'internal_ip', 'wan' ), true ) || $name === '' ) {
+            wp_safe_redirect( $redirect );
+            exit;
+        }
+
+        $redirect = wp_get_referer() ? wp_get_referer() : admin_url( 'admin.php?page=dc-servers-settings' );
+
+        if ( $type === 'internal_ip' ) {
+            $location_id = isset( $_POST['location_id'] ) ? intval( $_POST['location_id'] ) : 0;
+            if ( ! $location_id ) {
+                wp_safe_redirect( add_query_arg( 'dc_error', 'missing_host', $redirect ) );
+                exit;
+            }
+
+            if ( ! $this->is_valid_internal_ip( $name ) ) {
+                wp_safe_redirect( add_query_arg( 'dc_error', 'invalid_internal', $redirect ) );
+                exit;
+            }
+        }
+
+        if ( $type === 'wan' && ! $this->is_valid_subnet( $name ) ) {
+            wp_safe_redirect( add_query_arg( 'dc_error', 'invalid_wan_subnet', $redirect ) );
+            exit;
+        }
+
+        global $wpdb;
+        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations'
+            : ( $type === 'farm' ? $wpdb->prefix . 'dc_server_farms'
+            : ( $type === 'internal_ip' ? $wpdb->prefix . 'dc_server_internal_ips' : $wpdb->prefix . 'dc_server_wan_addresses' ) );
+        $column = in_array( $type, array( 'internal_ip', 'wan' ), true ) ? 'address' : 'name';
+
+        $data = array( $column => $name, 'updated_at' => current_time( 'mysql' ) );
+        $formats = array( '%s','%s' );
+
+        if ( $type === 'internal_ip' ) {
+            $data['location_id'] = isset( $_POST['location_id'] ) ? intval( $_POST['location_id'] ) : 0;
+            $formats[] = '%d';
+        }
+
+        $wpdb->replace( $table, $data, $formats );
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    public function handle_delete_lookup() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        if ( empty( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'dc_lookup_action' ) ) {
+            wp_die( 'Nonce error' );
+        }
+
+        $type = isset( $_POST['lookup_type'] ) ? sanitize_key( $_POST['lookup_type'] ) : '';
+        $id   = isset( $_POST['id'] ) ? intval( $_POST['id'] ) : 0;
+        $redirect = wp_get_referer() ? wp_get_referer() : admin_url( 'admin.php?page=dc-servers-settings' );
+
+        if ( ! in_array( $type, array( 'location', 'farm', 'internal_ip', 'wan' ), true ) || ! $id ) {
+            wp_safe_redirect( $redirect );
+            exit;
+        }
+
+        global $wpdb;
+        $table = $type === 'location' ? $wpdb->prefix . 'dc_server_locations'
+            : ( $type === 'farm' ? $wpdb->prefix . 'dc_server_farms'
+            : ( $type === 'internal_ip' ? $wpdb->prefix . 'dc_server_internal_ips' : $wpdb->prefix . 'dc_server_wan_addresses' ) );
+        $wpdb->delete( $table, array( 'id' => $id ), array( '%d' ) );
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    public function render_shortcode( $atts ) {
+        $search  = isset( $_GET['dc_s_search'] ) ? sanitize_text_field( $_GET['dc_s_search'] ) : '';
+        $orderby = isset( $_GET['dc_s_orderby'] ) ? sanitize_key( $_GET['dc_s_orderby'] ) : 'server_name';
+        $order   = isset( $_GET['dc_s_order'] ) ? sanitize_key( $_GET['dc_s_order'] )   : 'ASC';
+
+        if ( ! class_exists( 'DC_Customers_Manager' ) ) {
+            return 'התוסף לניהול לקוחות לא פעיל.';
+        }
+
+        $customers         = DC_Customers_Manager::get_all_customers();
+        $locations         = $this->get_locations();
+        $farms             = $this->get_farms();
+        $internal_pool     = $this->get_internal_pool();
+        $wan_pool          = $this->get_wan_pool();
+        $wan_candidates    = $this->get_wan_candidates();
+        $servers           = $this->get_servers( false, $search, $orderby, $order );
+        $next_internal     = $this->get_first_free_address( 'internal' );
+        $next_wan          = $this->get_first_free_address( 'wan' );
+        $free_internal_map = $this->get_internal_free_map();
+        $inventory_index   = $this->get_inventory_index();
+        $errors = get_transient( 'dc_servers_errors' );
+        delete_transient( 'dc_servers_errors' );
+
+        ob_start();
+        ?>
+        <div class="dc-servers-wrap">
+            <?php if ( ! empty( $errors ) ) : ?>
+                <div class="dc-errors">
+                    <?php foreach ( $errors as $e ) : ?>
+                        <p><?php echo esc_html( $e ); ?></p>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <div class="dc-nav-links">
+                <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14278">הגדרות</a>
+                <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14276">סל מחזור</a>
+                <a class="dc-btn-secondary" href="https://kb.macomp.co.il/?page_id=14270">רשימת שרתים</a>
+            </div>
+
+            <form method="get" class="dc-search-form">
+                <input type="text" name="dc_s_search" value="<?php echo esc_attr( $search ); ?>" placeholder="חיפוש לפי שרת / IP / לקוח">
+                <button type="submit">חיפוש</button>
+            </form>
+
+            <div class="dc-form-header">
+                <h3 class="dc-form-title">הוספת / עריכת שרת</h3>
+                <button type="button" class="dc-btn-primary dc-toggle-form">שרת חדש</button>
+            </div>
+
+            <form method="post" class="dc-form-modern dc-form-collapsed">
+                <input type="hidden" class="dc-ip-pool" data-available-internal='<?php echo esc_attr( wp_json_encode( array_map( function( $row ) { return array( 'address' => $row->address, 'host' => $row->location_name ); }, $internal_pool ) ) ); ?>' data-available-wan='<?php echo esc_attr( wp_json_encode( $wan_candidates ) ); ?>' data-next-internal="<?php echo esc_attr( $next_internal ); ?>" data-next-internal-map='<?php echo esc_attr( wp_json_encode( $free_internal_map ) ); ?>' data-next-wan="<?php echo esc_attr( $next_wan ); ?>">
+                <?php wp_nonce_field( 'dc_servers_action' ); ?>
+                <input type="hidden" name="dc_servers_action" value="add_or_update">
+                <input type="hidden" name="id" value="">
+
+                <div class="dc-form-grid">
+                    <div class="dc-field">
+                        <label>שם לקוח</label>
+                        <input type="text" name="customer_name_search" list="dc-customer-names" autocomplete="off" placeholder="הקלד שם לקוח" required>
+                        <datalist id="dc-customer-names">
+                            <?php foreach ( $customers as $c ) : ?>
+                                <option class="dc-customer-option" data-id="<?php echo esc_attr( $c->id ); ?>" data-number="<?php echo esc_attr( $c->customer_number ); ?>" data-name="<?php echo esc_attr( $c->customer_name ); ?>" value="<?php echo esc_attr( $c->customer_name ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                    </div>
+                    <div class="dc-field">
+                        <label>מספר לקוח</label>
+                        <input type="text" name="customer_number_search" list="dc-customer-numbers" autocomplete="off" placeholder="הקלד מספר לקוח" required>
+                        <datalist id="dc-customer-numbers">
+                            <?php foreach ( $customers as $c ) : ?>
+                                <option class="dc-customer-option" data-id="<?php echo esc_attr( $c->id ); ?>" data-number="<?php echo esc_attr( $c->customer_number ); ?>" data-name="<?php echo esc_attr( $c->customer_name ); ?>" value="<?php echo esc_attr( $c->customer_number ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                    </div>
+                    <input type="hidden" name="customer_id" value="">
+
+                    <div class="dc-field">
+                        <label>שם שרת</label>
+                        <input type="text" name="server_name" required>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>IP פנימי</label>
+                        <div class="dc-input-with-action">
+                            <input type="text" name="ip_internal" list="dc-ip-internal-list" required>
+                            <button type="button" class="dc-btn-secondary dc-fill-next-internal">כתובת פנימית פנויה</button>
+                        </div>
+                        <datalist id="dc-ip-internal-list">
+                            <?php foreach ( $internal_pool as $addr ) : ?>
+                                <option value="<?php echo esc_attr( $addr->address ); ?>" data-host="<?php echo esc_attr( $addr->location_name ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>IP WAN</label>
+                        <div class="dc-input-with-action">
+                            <input type="text" name="ip_wan" list="dc-ip-wan-list" required>
+                            <button type="button" class="dc-btn-secondary dc-fill-next-wan">כתובת WAN פנויה</button>
+                        </div>
+                        <datalist id="dc-ip-wan-list">
+                            <?php foreach ( $wan_candidates as $addr ) : ?>
+                                <option value="<?php echo esc_attr( $addr ); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>Hyper-v Host</label>
+                        <select name="location">
+                            <option value="">בחר Hyper-v Host...</option>
+                            <?php foreach ( $locations as $loc ) : ?>
+                                <option value="<?php echo esc_attr( $loc->name ); ?>"><?php echo esc_html( $loc->name ); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="dc-field">
+                        <label>חווה</label>
+                        <select name="farm">
+                            <option value="">בחר חווה...</option>
+                            <?php foreach ( $farms as $farm ) : ?>
+                                <option value="<?php echo esc_attr( $farm->name ); ?>"><?php echo esc_html( $farm->name ); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="dc-form-actions">
+                    <button type="submit" class="dc-btn-primary">שמירה</button>
+                </div>
+            </form>
+
+            <h3>רשימת שרתים</h3>
+            <div class="dc-table-wrapper">
+                <table class="dc-table-modern dc-table-expandable">
+                    <thead>
+                        <tr>
+                            <th>לקוח</th>
+                            <th>שם שרת</th>
+                            <th>IP פנימי</th>
+                            <th>IP WAN</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if ( $servers ) : ?>
+                            <?php foreach ( $servers as $s ) : ?>
+                                <?php
+                                $inventory_row = $this->find_inventory_for_server( $inventory_index, $s );
+                                $status        = $inventory_row && ! empty( $inventory_row->status ) ? $inventory_row->status : ( isset( $s->status ) ? $s->status : '' );
+                                $cpu_cores     = $inventory_row && isset( $inventory_row->cpu_cores ) ? $inventory_row->cpu_cores : ( isset( $s->cpu_cores ) ? $s->cpu_cores : '' );
+                                $memory_mb     = $inventory_row && isset( $inventory_row->memory_mb ) ? $inventory_row->memory_mb : ( isset( $s->memory_mb ) ? $s->memory_mb : '' );
+                                $nic1_ip       = $inventory_row && ! empty( $inventory_row->nic1_ip ) ? $inventory_row->nic1_ip : ( isset( $s->nic1_ip ) ? $s->nic1_ip : '' );
+                                $nic2_ip       = $inventory_row && ! empty( $inventory_row->nic2_ip ) ? $inventory_row->nic2_ip : ( isset( $s->nic2_ip ) ? $s->nic2_ip : '' );
+                                $disk1_size    = $inventory_row && isset( $inventory_row->physicaldisk1_sizegb ) ? $inventory_row->physicaldisk1_sizegb : ( isset( $s->physicaldisk1_sizegb ) ? $s->physicaldisk1_sizegb : '' );
+                                $disk2_size    = $inventory_row && isset( $inventory_row->physicaldisk2_sizegb ) ? $inventory_row->physicaldisk2_sizegb : ( isset( $s->physicaldisk2_sizegb ) ? $s->physicaldisk2_sizegb : '' );
+                                ?>
+                                <tr class="dc-server-row" data-server-id="<?php echo esc_attr( $s->id ); ?>">
+                                    <td>
+                                        <?php if ( ! empty( $s->customer_name ) ) : ?>
+                                            <?php echo esc_html( $s->customer_name ) . ' (' . esc_html( $s->customer_number ) . ')'; ?>
+                                        <?php else : ?>
+                                            <span class="dc-no-customer">לא משויך</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?php echo esc_html( $s->server_name ); ?></td>
+                                    <td><?php echo esc_html( $s->ip_internal ); ?></td>
+                                    <td><?php echo esc_html( $s->ip_wan ?: '—' ); ?></td>
+                                </tr>
+                                <tr class="dc-server-details" data-server-id="<?php echo esc_attr( $s->id ); ?>">
+                                    <td colspan="4">
+                                        <div class="dc-details-grid">
+                                            <div class="dc-detail-section">
+                                                <h4>מיקום ותשתית</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Hyper-V Host:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $s->location ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">חווה:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $s->farm ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">סטטוס:</span>
+                                                    <span class="dc-value dc-status-<?php echo sanitize_html_class( strtolower( $status ) ); ?>"><?php echo esc_html( $status ?: 'Unknown' ); ?></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="dc-detail-section">
+                                                <h4>משאבים</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">ליבות CPU:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $cpu_cores !== '' ? intval( $cpu_cores ) : '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">זיכרון:</span>
+                                                    <span class="dc-value"><?php echo $memory_mb !== '' ? esc_html( number_format( (int) $memory_mb ) . ' MB' ) : '—'; ?></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="dc-detail-section">
+                                                <h4>רשת</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">NIC1 IP:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $nic1_ip ?: '—' ); ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">NIC2 IP:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $nic2_ip ?: '—' ); ?></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="dc-detail-section">
+                                                <h4>אחסון</h4>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Disk1:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $disk1_size !== '' ? $disk1_size : '—' ); ?><?php echo $disk1_size !== '' ? ' GB' : ''; ?></span>
+                                                </div>
+                                                <div class="dc-detail-row">
+                                                    <span class="dc-label">Disk2:</span>
+                                                    <span class="dc-value"><?php echo esc_html( $disk2_size !== '' ? $disk2_size : '—' ); ?><?php echo $disk2_size !== '' ? ' GB' : ''; ?></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="dc-details-actions">
+                                            <button class="dc-btn-secondary dc-btn-icon dc-edit-server"
+                                                    data-id="<?php echo esc_attr( $s->id ); ?>"
+                                                    data-server_name="<?php echo esc_attr( $s->server_name ); ?>"
+                                                    data-ip_internal="<?php echo esc_attr( $s->ip_internal ); ?>"
+                                                    data-ip_wan="<?php echo esc_attr( $s->ip_wan ); ?>"
+                                                    data-location="<?php echo esc_attr( $s->location ); ?>"
+                                                    data-farm="<?php echo esc_attr( $s->farm ); ?>"
+                                                    data-customer_id="<?php echo esc_attr( $s->customer_id ); ?>"
+                                                    data-customer_name="<?php echo esc_attr( $s->customer_name ); ?>"
+                                                    data-customer_number="<?php echo esc_attr( $s->customer_number ); ?>">
+                                                <span class="dashicons dashicons-edit"></span>
+                                                עריכה
+                                            </button>
+
+                                            <button class="dc-btn-secondary dc-btn-icon dc-duplicate-server" data-id="<?php echo esc_attr( $s->id ); ?>">
+                                                <span class="dashicons dashicons-admin-page"></span>
+                                                שכפול
+                                            </button>
+
+                                            <form method="post" style="display:inline;" onsubmit="return confirm('האם למחוק את השרת?');">
+                                                <?php wp_nonce_field( 'dc_servers_action' ); ?>
+                                                <input type="hidden" name="dc_servers_action" value="soft_delete">
+                                                <input type="hidden" name="id" value="<?php echo esc_attr( $s->id ); ?>">
+                                                <button type="submit" class="dc-btn-danger dc-btn-icon">
+                                                    <span class="dashicons dashicons-trash"></span>
+                                                    מחיקה
+                                                </button>
+                                            </form>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
